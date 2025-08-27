@@ -1,7 +1,5 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
 from datetime import datetime
 import numpy as np
 
@@ -160,52 +158,55 @@ if current_data:
     with col1:
         st.markdown("### 📊 Category Progress Overview")
         
-        # Create progress chart
+        # Create progress chart using streamlit native charts
         categories = list(current_data.keys())
         completions = [current_data[cat]["completion"] for cat in categories]
         task_counts = [len(current_data[cat]["tasks"]) for cat in categories]
         
-        fig = go.Figure()
+        # Create dataframe for chart
+        chart_df = pd.DataFrame({
+            'Category': categories,
+            'Completion %': completions,
+            'Task Count': task_counts
+        })
         
-        fig.add_trace(go.Bar(
-            name='Completion %',
-            x=categories,
-            y=completions,
-            marker_color=['#28a745' if x == 100 else '#ffc107' for x in completions],
-            text=[f"{x}%" for x in completions],
-            textposition='auto',
-        ))
+        st.markdown("**Completion Status by Category:**")
+        st.bar_chart(chart_df.set_index('Category')['Completion %'], height=300)
         
-        fig.update_layout(
-            title="Project Category Completion Status",
-            xaxis_title="Categories",
-            yaxis_title="Completion Percentage",
-            showlegend=False,
-            height=400,
-            plot_bgcolor='rgba(0,0,0,0)',
-            paper_bgcolor='rgba(0,0,0,0)',
-        )
-        
-        st.plotly_chart(fig, use_container_width=True)
+        # Show completion status with colored indicators
+        for i, cat in enumerate(categories):
+            completion = completions[i]
+            if completion == 100:
+                st.success(f"✅ **{cat}**: {completion}% ({task_counts[i]} tasks)")
+            elif completion >= 75:
+                st.warning(f"🔄 **{cat}**: {completion}% ({task_counts[i]} tasks)")
+            else:
+                st.error(f"⚠️ **{cat}**: {completion}% ({task_counts[i]} tasks)")
     
     with col2:
         st.markdown("### 🎯 Task Distribution")
         
-        # Pie chart of task distribution
-        fig_pie = px.pie(
-            values=task_counts,
-            names=categories,
-            title="Tasks by Category",
-            color_discrete_sequence=['#8B0000', '#DC143C', '#B22222']
-        )
+        # Create a simple visual representation of task distribution
+        total_tasks = sum(task_counts)
         
-        fig_pie.update_layout(
-            height=400,
-            plot_bgcolor='rgba(0,0,0,0)',
-            paper_bgcolor='rgba(0,0,0,0)',
-        )
+        st.markdown("**Tasks by Category:**")
+        for i, cat in enumerate(categories):
+            percentage = (task_counts[i] / total_tasks) * 100
+            st.markdown(f"**{cat}:** {task_counts[i]} tasks ({percentage:.1f}%)")
+            st.progress(percentage / 100)
         
-        st.plotly_chart(fig_pie, use_container_width=True)
+        # Summary metrics
+        st.markdown("---")
+        st.metric("Total Tasks", total_tasks)
+        st.metric("Avg per Category", f"{total_tasks/len(categories):.1f}")
+        
+        # Task completion chart using native streamlit
+        completion_df = pd.DataFrame({
+            'Category': categories,
+            'Tasks': task_counts
+        })
+        st.markdown("**Task Count Distribution:**")
+        st.bar_chart(completion_df.set_index('Category'))
 
     st.markdown("---")
 
