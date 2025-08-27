@@ -5,7 +5,7 @@ import numpy as np
 
 # Page configuration
 st.set_page_config(
-    page_title="PhD Progress Dashboard - University of Chicago",
+    page_title="David's Progress Dashboard - University of Chicago",
     page_icon="🎓",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -63,7 +63,7 @@ st.markdown("""
 # Header
 st.markdown("""
 <div class="main-header">
-    <h1>🎓 PhD Progress Dashboard</h1>
+    <h1>🎓 David's Progress Dashboard</h1>
     <h3>University of Chicago</h3>
     <p>Research Progress & Task Completion Tracker</p>
 </div>
@@ -269,7 +269,7 @@ else:
 st.markdown("---")
 st.markdown("""
 <div style="text-align: center; color: #666; padding: 2rem;">
-    <p>University of Chicago PhD Progress Dashboard | Generated: {}</p>
+    <p>University of Chicago David's Progress Dashboard | Generated: {}</p>
     <p style="font-size: 0.9em;">Track your research milestones and task completion with data-driven insights</p>
 </div>
 """.format(datetime.now().strftime("%B %d, %Y")), unsafe_allow_html=True)
