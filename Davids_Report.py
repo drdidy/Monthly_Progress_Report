@@ -6,7 +6,7 @@ import numpy as np
 # Page configuration
 st.set_page_config(
     page_title="David's Progress Dashboard - University of Chicago",
-    page_icon="🎓",
+    page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -63,7 +63,7 @@ st.markdown("""
 # Header
 st.markdown("""
 <div class="main-header">
-    <h1>🎓 David's Progress Dashboard</h1>
+    <h1>🎓 PhD Progress Dashboard</h1>
     <h3>University of Chicago</h3>
     <p>Research Progress & Task Completion Tracker</p>
 </div>
@@ -80,7 +80,7 @@ selected_month = st.sidebar.selectbox(
 # Data structure for tasks (easily expandable for other months)
 task_data = {
     "August 2025": {
-        "PhD Manuscripts": {
+        "Research Manuscripts": {
             "tasks": [
                 "Revised manuscript one (transport-related physical activity) based on supervisor's feedback",
                 "Revised manuscript two (light rail and occupational groups) with updated statistical analyses", 
@@ -152,61 +152,43 @@ if current_data:
 
     st.markdown("---")
 
-    # Progress Overview Charts
-    col1, col2 = st.columns([2, 1])
+    # Achievement Summary
+    st.markdown("### 🏆 August 2025 Achievements Summary")
+    
+    col1, col2, col3 = st.columns(3)
     
     with col1:
-        st.markdown("### 📊 Category Progress Overview")
-        
-        # Create progress chart using streamlit native charts
-        categories = list(current_data.keys())
-        completions = [current_data[cat]["completion"] for cat in categories]
-        task_counts = [len(current_data[cat]["tasks"]) for cat in categories]
-        
-        # Create dataframe for chart
-        chart_df = pd.DataFrame({
-            'Category': categories,
-            'Completion %': completions,
-            'Task Count': task_counts
-        })
-        
-        st.markdown("**Completion Status by Category:**")
-        st.bar_chart(chart_df.set_index('Category')['Completion %'], height=300)
-        
-        # Show completion status with colored indicators
-        for i, cat in enumerate(categories):
-            completion = completions[i]
-            if completion == 100:
-                st.success(f"✅ **{cat}**: {completion}% ({task_counts[i]} tasks)")
-            elif completion >= 75:
-                st.warning(f"🔄 **{cat}**: {completion}% ({task_counts[i]} tasks)")
-            else:
-                st.error(f"⚠️ **{cat}**: {completion}% ({task_counts[i]} tasks)")
+        st.markdown("""
+        <div class="metric-card">
+            <h4>📚 Research Manuscripts</h4>
+            <p><strong>7 tasks completed</strong></p>
+            <p>✅ All 3 manuscripts revised and advanced</p>
+            <p>✅ Manuscript 1 ready for submission</p>
+            <p>✅ Clear timeline established</p>
+        </div>
+        """, unsafe_allow_html=True)
     
     with col2:
-        st.markdown("### 🎯 Task Distribution")
-        
-        # Create a simple visual representation of task distribution
-        total_tasks = sum(task_counts)
-        
-        st.markdown("**Tasks by Category:**")
-        for i, cat in enumerate(categories):
-            percentage = (task_counts[i] / total_tasks) * 100
-            st.markdown(f"**{cat}:** {task_counts[i]} tasks ({percentage:.1f}%)")
-            st.progress(percentage / 100)
-        
-        # Summary metrics
-        st.markdown("---")
-        st.metric("Total Tasks", total_tasks)
-        st.metric("Avg per Category", f"{total_tasks/len(categories):.1f}")
-        
-        # Task completion chart using native streamlit
-        completion_df = pd.DataFrame({
-            'Category': categories,
-            'Tasks': task_counts
-        })
-        st.markdown("**Task Count Distribution:**")
-        st.bar_chart(completion_df.set_index('Category'))
+        st.markdown("""
+        <div class="metric-card">
+            <h4>📝 Journal Preparation</h4>
+            <p><strong>3 tasks completed</strong></p>
+            <p>✅ Cover letters drafted</p>
+            <p>✅ Supplementary files finalized</p>
+            <p>✅ Formatting compliance ensured</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col3:
+        st.markdown("""
+        <div class="metric-card">
+            <h4>📋 ONCO-D IRB Protocol</h4>
+            <p><strong>9 tasks completed</strong></p>
+            <p>✅ Complete protocol rewrite</p>
+            <p>✅ Data governance integration</p>
+            <p>✅ Team coordination completed</p>
+        </div>
+        """, unsafe_allow_html=True)
 
     st.markdown("---")
 
@@ -257,10 +239,10 @@ if current_data:
     with col2:
         st.markdown("### 📈 Performance Summary")
         if selected_month == "August 2025":
-            st.success("🎉 **Exceptional Progress!** All planned tasks completed successfully")
-            st.info("📚 **3 manuscripts** advanced significantly with clear submission timeline")
-            st.info("📋 **IRB protocol** completely rewritten and structured for approval")
-            st.info("📝 **Journal submission** materials prepared and formatted")
+            st.success("🎉 **Outstanding Performance!** All planned tasks completed successfully")
+            st.info("📚 **3 research manuscripts** advanced with clear submission timeline")
+            st.info("📋 **ONCO-D IRB protocol** completely rewritten and structured")
+            st.info("📝 **Journal submission** materials prepared and compliant")
 
 else:
     st.info(f"📝 Task data for {selected_month} will be added as work progresses. Use the sidebar to select August 2025 to view completed work.")
@@ -269,8 +251,8 @@ else:
 st.markdown("---")
 st.markdown("""
 <div style="text-align: center; color: #666; padding: 2rem;">
-    <p>University of Chicago David's Progress Dashboard | Generated: {}</p>
-    <p style="font-size: 0.9em;">Track your research milestones and task completion with data-driven insights</p>
+    <p>David's Progress Dashboard | University of Chicago | Generated: {}</p>
+    <p style="font-size: 0.9em;">Senior Clinical Research Data Manager - Task Completion Summary</p>
 </div>
 """.format(datetime.now().strftime("%B %d, %Y")), unsafe_allow_html=True)
 
