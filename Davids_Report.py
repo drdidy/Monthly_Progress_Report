@@ -63,7 +63,7 @@ st.markdown("""
 # Header
 st.markdown("""
 <div class="main-header">
-    <h1>🎓 PhD Progress Dashboard</h1>
+    <h1>🎓 David's Progress Dashboard</h1>
     <h3>University of Chicago</h3>
     <p>Research Progress & Task Completion Tracker</p>
 </div>
