@@ -1,0 +1,35 @@
+```toml
+[theme]
+base = "dark"
+font = "Rajdhani:https://fonts.googleapis.com/css2?family=Rajdhani:wght@300;400;500;600;700&display=swap"
+headingFont = "Orbitron:https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&display=swap"
+codeFont = "'JetBrains Mono':https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap"
+baseFontSize = 15
+primaryColor = "#00d4ff"
+backgroundColor = "#060910"
+secondaryBackgroundColor = "#0c1220"
+textColor = "#ccd6f6"
+baseRadius = "0.4rem"
+redColor = "#ff1744"
+greenColor = "#00e676"
+blueColor = "#00d4ff"
+yellowColor = "#ffd740"
+violetColor = "#7b2ff7"
+orangeColor = "#ff6b35"
+grayColor = "#3a4a6a"
+linkColor = "#00d4ff"
+codeTextColor = "#00e676"
+codeBackgroundColor = "#0a0f1a"
+widgetBorderColor = "#1e2d4a"
+borderColor = "#1e2d4a"
+sidebarBorderShow = false
+
+[theme.sidebar]
+backgroundColor = "#060910"
+secondaryBackgroundColor = "#0a0f1a"
+primaryColor = "#00d4ff"
+textColor = "#8892b0"
+
+[server]
+enableStaticServing = true
+```
