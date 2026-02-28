@@ -20,150 +20,437 @@ st.set_page_config(
 )
 
 # ============================================================
-# CUSTOM STYLING
+# CUSTOM STYLING — Mission Control Terminal Design
 # ============================================================
 st.markdown("""
 <style>
+    /* ═══════════════════════════════════════════════════════════
+       FONTS — Google Fonts: Orbitron (display), JetBrains Mono (data), Rajdhani (body)
+       ═══════════════════════════════════════════════════════════ */
     @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&family=Rajdhani:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500;600;700&display=swap');
     
-    .stApp {
-        background: linear-gradient(135deg, #0a0a0f 0%, #0d1117 50%, #0a0f1a 100%);
+    /* ═══════════════════════════════════════════════════════════
+       ANIMATIONS — Pulse, glow, fade-in, price flash
+       ═══════════════════════════════════════════════════════════ */
+    @keyframes pulse-glow {
+        0%, 100% { box-shadow: 0 0 8px rgba(0,212,255,0.15), inset 0 0 8px rgba(0,212,255,0.05); }
+        50% { box-shadow: 0 0 20px rgba(0,212,255,0.3), inset 0 0 15px rgba(0,212,255,0.08); }
+    }
+    @keyframes pulse-border-bull {
+        0%, 100% { border-color: rgba(0,230,118,0.4); box-shadow: 0 0 15px rgba(0,230,118,0.1); }
+        50% { border-color: rgba(0,230,118,0.9); box-shadow: 0 0 30px rgba(0,230,118,0.25); }
+    }
+    @keyframes pulse-border-bear {
+        0%, 100% { border-color: rgba(255,23,68,0.4); box-shadow: 0 0 15px rgba(255,23,68,0.1); }
+        50% { border-color: rgba(255,23,68,0.9); box-shadow: 0 0 30px rgba(255,23,68,0.25); }
+    }
+    @keyframes pulse-border-neutral {
+        0%, 100% { border-color: rgba(255,215,64,0.4); box-shadow: 0 0 15px rgba(255,215,64,0.1); }
+        50% { border-color: rgba(255,215,64,0.9); box-shadow: 0 0 30px rgba(255,215,64,0.2); }
+    }
+    @keyframes live-dot {
+        0%, 100% { opacity: 1; transform: scale(1); }
+        50% { opacity: 0.4; transform: scale(0.7); }
+    }
+    @keyframes fade-in-up {
+        from { opacity: 0; transform: translateY(12px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes price-flash {
+        0% { background: rgba(0,212,255,0.15); }
+        100% { background: transparent; }
+    }
+    @keyframes shimmer {
+        0% { background-position: -200% 0; }
+        100% { background-position: 200% 0; }
+    }
+    @keyframes gradient-text {
+        0% { background-position: 0% 50%; }
+        50% { background-position: 100% 50%; }
+        100% { background-position: 0% 50%; }
     }
     
+    /* ═══════════════════════════════════════════════════════════
+       APP SHELL — Deep space background with subtle noise
+       ═══════════════════════════════════════════════════════════ */
+    .stApp {
+        background: 
+            radial-gradient(ellipse at 20% 50%, rgba(0,212,255,0.03) 0%, transparent 50%),
+            radial-gradient(ellipse at 80% 20%, rgba(123,47,247,0.03) 0%, transparent 50%),
+            radial-gradient(ellipse at 50% 80%, rgba(255,107,53,0.02) 0%, transparent 50%),
+            linear-gradient(180deg, #050810 0%, #080d16 40%, #0a0f1a 100%);
+    }
+    
+    /* ═══════════════════════════════════════════════════════════
+       HIDE STREAMLIT CHROME — Clean terminal look
+       ═══════════════════════════════════════════════════════════ */
+    #MainMenu { visibility: hidden; }
+    footer { visibility: hidden; }
+    header[data-testid="stHeader"] { background: transparent; }
+    div[data-testid="stDecoration"] { display: none; }
+    
+    /* ═══════════════════════════════════════════════════════════
+       SCROLLBAR — Thin glowing accent
+       ═══════════════════════════════════════════════════════════ */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #060910; }
+    ::-webkit-scrollbar-thumb { 
+        background: linear-gradient(180deg, #00d4ff44, #7b2ff744); 
+        border-radius: 3px; 
+    }
+    ::-webkit-scrollbar-thumb:hover { background: #00d4ff88; }
+    
+    /* ═══════════════════════════════════════════════════════════
+       SIDEBAR — Cockpit control panel
+       ═══════════════════════════════════════════════════════════ */
+    div[data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #060910 0%, #0a0f1a 50%, #080d16 100%);
+        border-right: 1px solid rgba(0,212,255,0.1);
+    }
+    div[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p {
+        font-family: 'Rajdhani', sans-serif;
+    }
+    
+    /* ═══════════════════════════════════════════════════════════
+       TABS — Cockpit segment buttons
+       ═══════════════════════════════════════════════════════════ */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 4px;
+        background: rgba(6,9,16,0.8);
+        border: 1px solid rgba(0,212,255,0.08);
+        border-radius: 10px;
+        padding: 4px;
+    }
+    .stTabs [data-baseweb="tab"] {
+        font-family: 'Orbitron', monospace;
+        font-size: 0.72rem;
+        letter-spacing: 1.5px;
+        text-transform: uppercase;
+        border-radius: 8px;
+        padding: 8px 16px;
+        color: #5a6a8a;
+        transition: all 0.3s ease;
+    }
+    .stTabs [data-baseweb="tab"]:hover {
+        color: #ccd6f6;
+        background: rgba(0,212,255,0.06);
+    }
+    .stTabs [aria-selected="true"] {
+        color: #00d4ff !important;
+        background: rgba(0,212,255,0.08) !important;
+        border-bottom: 2px solid #00d4ff !important;
+    }
+    
+    /* ═══════════════════════════════════════════════════════════
+       HEADER — Animated gradient title
+       ═══════════════════════════════════════════════════════════ */
     .main-header {
         font-family: 'Orbitron', monospace;
-        font-size: 2.2rem;
+        font-size: 2.4rem;
         font-weight: 800;
-        background: linear-gradient(135deg, #00d4ff 0%, #7b2ff7 50%, #ff6b35 100%);
+        background: linear-gradient(135deg, #00d4ff, #7b2ff7, #ff6b35, #00d4ff);
+        background-size: 300% 300%;
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         text-align: center;
-        padding: 10px 0;
-        letter-spacing: 3px;
+        padding: 8px 0 4px 0;
+        letter-spacing: 4px;
         text-transform: uppercase;
+        animation: gradient-text 6s ease infinite;
     }
     
     .sub-header {
         font-family: 'Rajdhani', sans-serif;
-        color: #8892b0;
+        color: #3a4a6a;
         text-align: center;
-        font-size: 1rem;
-        letter-spacing: 5px;
+        font-size: 0.85rem;
+        letter-spacing: 6px;
         text-transform: uppercase;
-        margin-bottom: 20px;
+        margin-bottom: 8px;
     }
     
+    /* ═══════════════════════════════════════════════════════════
+       LIVE STATUS BAR — Full width indicator
+       ═══════════════════════════════════════════════════════════ */
+    .live-bar {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+        background: rgba(0,212,255,0.04);
+        border: 1px solid rgba(0,212,255,0.1);
+        border-radius: 10px;
+        padding: 10px 20px;
+        margin: 8px 0 16px 0;
+        animation: fade-in-up 0.5s ease;
+    }
+    .live-dot {
+        width: 8px; height: 8px;
+        background: #ff1744;
+        border-radius: 50%;
+        animation: live-dot 1.5s ease-in-out infinite;
+    }
+    .live-dot.active {
+        background: #00e676;
+    }
+    
+    /* ═══════════════════════════════════════════════════════════
+       METRIC CARDS — Glassmorphism with glow
+       ═══════════════════════════════════════════════════════════ */
     .metric-card {
-        background: linear-gradient(145deg, #131a2e 0%, #0d1220 100%);
-        border: 1px solid #1e2d4a;
-        border-radius: 12px;
-        padding: 20px;
+        background: linear-gradient(145deg, 
+            rgba(14,20,36,0.95) 0%, 
+            rgba(10,15,26,0.98) 100%);
+        border: 1px solid rgba(30,45,74,0.5);
+        border-radius: 14px;
+        padding: 22px 16px;
         margin: 8px 0;
-        box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+        box-shadow: 
+            0 4px 24px rgba(0,0,0,0.4),
+            0 1px 3px rgba(0,212,255,0.05);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
         min-height: 140px;
         display: flex;
         flex-direction: column;
         justify-content: center;
         align-items: center;
         text-align: center;
+        animation: fade-in-up 0.4s ease;
+        transition: border-color 0.3s ease, box-shadow 0.3s ease;
+    }
+    .metric-card:hover {
+        border-color: rgba(0,212,255,0.3);
+        box-shadow: 
+            0 8px 32px rgba(0,0,0,0.5),
+            0 0 20px rgba(0,212,255,0.08);
+    }
+    .metric-card.glow-live {
+        animation: pulse-glow 3s ease-in-out infinite;
     }
     
     .metric-label {
         font-family: 'Rajdhani', sans-serif;
-        color: #5a6a8a;
-        font-size: 0.8rem;
+        color: #3a4a6a;
+        font-size: 0.75rem;
         text-transform: uppercase;
-        letter-spacing: 2px;
+        letter-spacing: 2.5px;
+        margin-bottom: 4px;
     }
     
     .metric-value-bull {
         font-family: 'JetBrains Mono', monospace;
         color: #00e676;
-        font-size: 1.6rem;
+        font-size: 1.7rem;
         font-weight: 700;
+        text-shadow: 0 0 20px rgba(0,230,118,0.2);
     }
     
     .metric-value-bear {
         font-family: 'JetBrains Mono', monospace;
         color: #ff1744;
-        font-size: 1.6rem;
+        font-size: 1.7rem;
         font-weight: 700;
+        text-shadow: 0 0 20px rgba(255,23,68,0.2);
     }
     
     .metric-value-neutral {
         font-family: 'JetBrains Mono', monospace;
         color: #00d4ff;
-        font-size: 1.6rem;
+        font-size: 1.7rem;
         font-weight: 700;
+        text-shadow: 0 0 20px rgba(0,212,255,0.2);
     }
     
+    /* ═══════════════════════════════════════════════════════════
+       SIGNAL BOXES — Animated glow borders
+       ═══════════════════════════════════════════════════════════ */
     .signal-box-bull {
-        background: linear-gradient(145deg, #0a2e1a 0%, #0d1220 100%);
-        border: 1px solid #00e676;
-        border-radius: 12px;
-        padding: 20px;
+        background: linear-gradient(145deg, rgba(0,46,26,0.6) 0%, rgba(10,15,26,0.95) 100%);
+        border: 2px solid rgba(0,230,118,0.4);
+        border-radius: 14px;
+        padding: 24px;
         text-align: center;
+        animation: pulse-border-bull 3s ease-in-out infinite, fade-in-up 0.5s ease;
     }
     
     .signal-box-bear {
-        background: linear-gradient(145deg, #2e0a0a 0%, #0d1220 100%);
-        border: 1px solid #ff1744;
-        border-radius: 12px;
-        padding: 20px;
+        background: linear-gradient(145deg, rgba(46,10,10,0.6) 0%, rgba(10,15,26,0.95) 100%);
+        border: 2px solid rgba(255,23,68,0.4);
+        border-radius: 14px;
+        padding: 24px;
         text-align: center;
+        animation: pulse-border-bear 3s ease-in-out infinite, fade-in-up 0.5s ease;
     }
     
     .signal-box-neutral {
-        background: linear-gradient(145deg, #1a1a2e 0%, #0d1220 100%);
-        border: 1px solid #ffd740;
-        border-radius: 12px;
-        padding: 20px;
+        background: linear-gradient(145deg, rgba(26,26,46,0.6) 0%, rgba(10,15,26,0.95) 100%);
+        border: 2px solid rgba(255,215,64,0.4);
+        border-radius: 14px;
+        padding: 24px;
         text-align: center;
+        animation: pulse-border-neutral 3s ease-in-out infinite, fade-in-up 0.5s ease;
     }
     
+    /* ═══════════════════════════════════════════════════════════
+       CONFLUENCE — Score display
+       ═══════════════════════════════════════════════════════════ */
     .confluence-high {
         font-family: 'Orbitron', monospace;
         color: #00e676;
-        font-size: 2rem;
+        font-size: 2.2rem;
+        text-shadow: 0 0 30px rgba(0,230,118,0.3);
     }
-    
     .confluence-med {
         font-family: 'Orbitron', monospace;
         color: #ffd740;
-        font-size: 2rem;
+        font-size: 2.2rem;
+        text-shadow: 0 0 30px rgba(255,215,64,0.3);
     }
-    
     .confluence-low {
         font-family: 'Orbitron', monospace;
         color: #ff1744;
-        font-size: 2rem;
+        font-size: 2.2rem;
+        text-shadow: 0 0 30px rgba(255,23,68,0.3);
     }
     
-    .prop-account {
-        background: linear-gradient(145deg, #131a2e 0%, #0d1220 100%);
-        border: 1px solid #1e2d4a;
-        border-radius: 12px;
-        padding: 15px;
-        margin: 5px 0;
+    /* ═══════════════════════════════════════════════════════════
+       TRADE CARD — Premium glassmorphism with direction glow
+       ═══════════════════════════════════════════════════════════ */
+    .trade-card {
+        background: linear-gradient(145deg, 
+            rgba(14,20,36,0.95) 0%, 
+            rgba(8,13,22,0.98) 100%);
+        border-radius: 16px;
+        padding: 24px;
+        margin: 12px 0;
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        animation: fade-in-up 0.5s ease;
+    }
+    .trade-card-bull {
+        border: 2px solid rgba(0,230,118,0.25);
+        box-shadow: 0 8px 32px rgba(0,0,0,0.4), 0 0 40px rgba(0,230,118,0.06);
+    }
+    .trade-card-bear {
+        border: 2px solid rgba(255,82,82,0.25);
+        box-shadow: 0 8px 32px rgba(0,0,0,0.4), 0 0 40px rgba(255,82,82,0.06);
     }
     
+    /* ═══════════════════════════════════════════════════════════
+       LADDER ROWS — Hover highlight
+       ═══════════════════════════════════════════════════════════ */
+    .ladder-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 8px 14px;
+        margin: 2px 0;
+        border-radius: 0 8px 8px 0;
+        transition: all 0.2s ease;
+    }
+    .ladder-row:hover {
+        transform: translateX(4px);
+        filter: brightness(1.3);
+    }
+    
+    /* ═══════════════════════════════════════════════════════════
+       SECTION DIVIDER — Subtle gradient line
+       ═══════════════════════════════════════════════════════════ */
     .section-divider {
-        border-top: 1px solid #1e2d4a;
-        margin: 20px 0;
+        border: none;
+        height: 1px;
+        background: linear-gradient(90deg, transparent, rgba(0,212,255,0.15), transparent);
+        margin: 24px 0;
     }
     
-    div[data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #0a0e17 0%, #0d1220 100%);
-        border-right: 1px solid #1e2d4a;
+    /* ═══════════════════════════════════════════════════════════
+       PROP ACCOUNT CARDS
+       ═══════════════════════════════════════════════════════════ */
+    .prop-account {
+        background: linear-gradient(145deg, rgba(14,20,36,0.9) 0%, rgba(10,15,26,0.95) 100%);
+        border: 1px solid rgba(30,45,74,0.4);
+        border-radius: 14px;
+        padding: 16px;
+        margin: 6px 0;
+        transition: border-color 0.3s ease;
+    }
+    .prop-account:hover {
+        border-color: rgba(0,212,255,0.2);
     }
     
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
-    }
-    
-    .stTabs [data-baseweb="tab"] {
-        font-family: 'Rajdhani', sans-serif;
+    /* ═══════════════════════════════════════════════════════════
+       BUTTONS — Styled Streamlit buttons
+       ═══════════════════════════════════════════════════════════ */
+    .stButton > button {
+        font-family: 'Rajdhani', sans-serif !important;
         letter-spacing: 1px;
+        text-transform: uppercase;
+        font-weight: 600;
+        transition: all 0.3s ease;
+        border: 1px solid rgba(0,212,255,0.2) !important;
+        background: rgba(0,212,255,0.06) !important;
+    }
+    .stButton > button:hover {
+        border-color: rgba(0,212,255,0.5) !important;
+        box-shadow: 0 0 20px rgba(0,212,255,0.15);
+        background: rgba(0,212,255,0.12) !important;
+    }
+    
+    /* ═══════════════════════════════════════════════════════════
+       INPUTS — Number inputs, selectboxes
+       ═══════════════════════════════════════════════════════════ */
+    .stNumberInput input, .stTextInput input, .stSelectbox select {
+        font-family: 'JetBrains Mono', monospace !important;
+    }
+    
+    /* ═══════════════════════════════════════════════════════════
+       SCENARIO GRID — Premium projection cards
+       ═══════════════════════════════════════════════════════════ */
+    .scenario-card {
+        background: linear-gradient(145deg, rgba(14,20,36,0.9) 0%, rgba(10,15,26,0.95) 100%);
+        border-radius: 12px;
+        padding: 14px;
+        text-align: center;
+        transition: all 0.3s ease;
+    }
+    .scenario-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+    }
+    
+    /* ═══════════════════════════════════════════════════════════
+       PRICE MARKER — Current price in ladder
+       ═══════════════════════════════════════════════════════════ */
+    .price-marker {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        padding: 8px 14px;
+        margin: 5px 0;
+        border-radius: 10px;
+        animation: fade-in-up 0.4s ease;
+        position: relative;
+        overflow: hidden;
+    }
+    .price-marker::before {
+        content: '';
+        position: absolute;
+        top: 0; left: -200%; right: -200%; bottom: 0;
+        background: linear-gradient(90deg, transparent, rgba(255,255,255,0.05), transparent);
+        animation: shimmer 3s ease-in-out infinite;
+    }
+    
+    /* ═══════════════════════════════════════════════════════════
+       RULES BOX — Session rules with left accent
+       ═══════════════════════════════════════════════════════════ */
+    .rules-box {
+        background: linear-gradient(145deg, rgba(14,20,36,0.9) 0%, rgba(10,15,26,0.95) 100%);
+        border: 1px solid rgba(30,45,74,0.4);
+        border-left: 3px solid #ffd740;
+        border-radius: 0 14px 14px 0;
+        padding: 18px 20px;
+        margin: 12px 0;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -1671,27 +1958,27 @@ def main():
         ladder_9am.sort(key=lambda x: x['value'], reverse=True)
         
         if ladder_9am:
-            ladder_html = '<div style="font-family: JetBrains Mono; font-size: 0.85rem;">'
+            ladder_html = '<div style="font-family: JetBrains Mono, monospace; font-size: 0.85rem;">'
             for i, line in enumerate(ladder_9am):
-                bg = 'rgba(255,23,68,0.08)' if line['direction'] == 'ascending' else 'rgba(0,230,118,0.08)'
+                bg = 'rgba(255,23,68,0.06)' if line['direction'] == 'ascending' else 'rgba(0,230,118,0.06)'
                 border = line['color']
                 weight = 'bold' if line['is_key'] else 'normal'
                 key_tag = ' ★' if line['is_key'] else ''
                 change_sign = '+' if line['change'] >= 0 else ''
+                delay = i * 0.04
                 ladder_html += f"""
-                <div style="display:flex; justify-content:space-between; align-items:center;
-                            padding: 8px 12px; margin: 2px 0; border-left: 3px solid {border};
-                            background: {bg}; border-radius: 0 6px 6px 0;">
-                    <span style="color: {line['color']}; min-width: 130px; font-weight: {weight};">
+                <div class="ladder-row" style="border-left: 3px solid {border};
+                            background: {bg}; animation: fade-in-up 0.3s ease {delay}s both;">
+                    <span style="color: {line['color']}; min-width: 140px; font-weight: {weight};">
                         {line['short']} {line['name'][:20]}{key_tag}
                     </span>
                     <span style="color: #ccd6f6; font-weight: 700; min-width: 80px; text-align:right;">
                         {line['value']:.2f}
                     </span>
-                    <span style="color: #5a6a8a; font-size: 0.75rem; min-width: 100px; text-align:right;">
+                    <span style="color: #3a4a6a; font-size: 0.73rem; min-width: 100px; text-align:right;">
                         Anchor: {line['anchor']:.2f}
                     </span>
-                    <span style="color: {'#00e676' if line['change'] >= 0 else '#ff5252'}; font-size: 0.75rem; min-width: 70px; text-align:right;">
+                    <span style="color: {'#00e676' if line['change'] >= 0 else '#ff5252'}; font-size: 0.73rem; min-width: 70px; text-align:right;">
                         {change_sign}{line['change']:.2f}
                     </span>
                 </div>"""
@@ -2039,12 +2326,11 @@ def main():
             # RULES REMINDER
             # ============================================================
             st.markdown("""
-            <div style="background: linear-gradient(145deg, #131a2e 0%, #0d1220 100%);
-                        border: 1px solid #1e2d4a; border-radius: 12px; padding: 16px; margin: 10px 0;">
-                <div style="font-family: Orbitron; color: #ffd740; font-size: 0.9rem; margin-bottom: 8px;">
+            <div class="rules-box">
+                <div style="font-family: Orbitron, monospace; color: #ffd740; font-size: 0.9rem; margin-bottom: 10px; letter-spacing: 2px;">
                     ⏰ SESSION RULES
                 </div>
-                <div style="font-family: JetBrains Mono; color: #8892b0; font-size: 0.8rem; line-height: 1.8;">
+                <div style="font-family: JetBrains Mono, monospace; color: #8892b0; font-size: 0.8rem; line-height: 2;">
                     5:00 PM — Globex opens. NO TRADES. Observe range formation.<br>
                     6:00 PM — DECISION POINT. Read price vs line ladder. Plan entries.<br>
                     6:00-7:00 PM — TRADING WINDOW. Execute setups. Max 5 pt move expected.<br>
@@ -2517,12 +2803,11 @@ def main():
             
             # Execution rules
             st.markdown(f"""
-            <div style="background: linear-gradient(145deg, #131a2e 0%, #0d1220 100%);
-                        border: 1px solid #1e2d4a; border-radius: 12px; padding: 16px; margin: 10px 0;">
-                <div style="font-family: Orbitron; color: #ffd740; font-size: 0.9rem; margin-bottom: 8px;">
+            <div class="rules-box">
+                <div style="font-family: Orbitron, monospace; color: #ffd740; font-size: 0.9rem; margin-bottom: 10px; letter-spacing: 2px;">
                     ⏰ EXECUTION RULES
                 </div>
-                <div style="font-family: JetBrains Mono; color: #8892b0; font-size: 0.8rem; line-height: 1.8;">
+                <div style="font-family: JetBrains Mono, monospace; color: #8892b0; font-size: 0.8rem; line-height: 2;">
                     9:00 AM — DECISION. Read ladder position. Determine bias.<br>
                     9:05 AM — ENTRY. Let opening IV settle. Buy 3× SPX {strike} {'P' if trade_direction == 'PUT' else 'C'} @ ~${final_premium:.2f}<br>
                     STOP — Close ALL 3 contracts if SPX {'rises above' if trade_direction == 'PUT' else 'drops below'} {stop_price:.2f} ({stop_line['short'] if stop_line else 'N/A'})<br>
@@ -2537,12 +2822,11 @@ def main():
             # No clear direction
             st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
             st.markdown("""
-            <div style="background: linear-gradient(145deg, #131a2e 0%, #0d1220 100%);
-                        border: 1px solid #ffd740; border-radius: 12px; padding: 20px; margin: 10px 0; text-align:center;">
-                <div style="font-family: Orbitron; color: #ffd740; font-size: 1.2rem;">
+            <div class="signal-box-neutral" style="animation: pulse-border-neutral 3s ease-in-out infinite, fade-in-up 0.5s ease;">
+                <div style="font-family: Orbitron, monospace; color: #ffd740; font-size: 1.2rem; letter-spacing: 2px;">
                     ⏸️ NO TRADE — WAIT FOR CLARITY
                 </div>
-                <div style="font-family: Rajdhani; color: #8892b0; font-size: 1rem; margin-top: 10px;">
+                <div style="font-family: Rajdhani, sans-serif; color: #8892b0; font-size: 1rem; margin-top: 12px;">
                     Price is between conflicting lines. Wait for a break above or below to establish direction.
                 </div>
             </div>
