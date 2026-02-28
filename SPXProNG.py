@@ -680,6 +680,20 @@ def main():
             # We'll add sessions for the overnight and next day
             sessions_to_draw = []
             
+            # Determine if this is a Friday-to-Monday scenario
+            prior_weekday = prior_date.weekday() if hasattr(prior_date, 'weekday') else datetime.combine(prior_date, time(0,0)).weekday()
+            is_friday = prior_weekday == 4  # Friday = 4
+            
+            # Globex open date: normally prior_date evening, but Sunday for Friday
+            if is_friday:
+                # Friday: market closes at 4pm, reopens Sunday 5pm
+                globex_date = next_date - timedelta(days=1)  # Sunday
+            else:
+                globex_date = prior_date if hasattr(prior_date, 'year') else datetime.combine(prior_date, time(0,0))
+                if not isinstance(globex_date, datetime):
+                    globex_date = datetime.combine(globex_date, time(0,0))
+                globex_date = prior_date
+            
             # Prior day NY session
             sessions_to_draw.append({
                 'name': 'New York',
@@ -689,32 +703,63 @@ def main():
                 'border': SESSION_TIMES['New York']['border']
             })
             
-            # Maintenance
-            sessions_to_draw.append({
-                'name': 'Maintenance',
-                'start': datetime.combine(prior_date, time(16, 0)),
-                'end': datetime.combine(prior_date, time(17, 0)),
-                'color': 'rgba(100,100,100,0.1)',
-                'border': 'rgba(100,100,100,0.3)'
-            })
-            
-            # Sydney (overnight)
-            sessions_to_draw.append({
-                'name': 'Sydney',
-                'start': datetime.combine(prior_date, time(17, 0)),
-                'end': datetime.combine(prior_date, time(19, 0)),
-                'color': SESSION_TIMES['Sydney']['color'],
-                'border': SESSION_TIMES['Sydney']['border']
-            })
-            
-            # Tokyo
-            sessions_to_draw.append({
-                'name': 'Tokyo',
-                'start': datetime.combine(prior_date, time(19, 0)),
-                'end': datetime.combine(next_date, time(2, 0)),
-                'color': SESSION_TIMES['Tokyo']['color'],
-                'border': SESSION_TIMES['Tokyo']['border']
-            })
+            if not is_friday:
+                # Normal weekday: show maintenance and overnight sessions
+                # Maintenance
+                sessions_to_draw.append({
+                    'name': 'Maintenance',
+                    'start': datetime.combine(prior_date, time(16, 0)),
+                    'end': datetime.combine(prior_date, time(17, 0)),
+                    'color': 'rgba(100,100,100,0.1)',
+                    'border': 'rgba(100,100,100,0.3)'
+                })
+                
+                # Sydney (overnight)
+                sessions_to_draw.append({
+                    'name': 'Sydney',
+                    'start': datetime.combine(prior_date, time(17, 0)),
+                    'end': datetime.combine(prior_date, time(19, 0)),
+                    'color': SESSION_TIMES['Sydney']['color'],
+                    'border': SESSION_TIMES['Sydney']['border']
+                })
+                
+                # Tokyo
+                sessions_to_draw.append({
+                    'name': 'Tokyo',
+                    'start': datetime.combine(prior_date, time(19, 0)),
+                    'end': datetime.combine(next_date, time(2, 0)),
+                    'color': SESSION_TIMES['Tokyo']['color'],
+                    'border': SESSION_TIMES['Tokyo']['border']
+                })
+            else:
+                # Friday: show weekend closure then Sunday evening sessions
+                # Weekend closure box
+                sessions_to_draw.append({
+                    'name': 'WEEKEND CLOSED',
+                    'start': datetime.combine(prior_date, time(16, 0)),
+                    'end': datetime.combine(next_date - timedelta(days=1), time(17, 0)),
+                    'color': 'rgba(100,100,100,0.05)',
+                    'border': 'rgba(100,100,100,0.2)'
+                })
+                
+                # Sunday evening globex open
+                sun_date = next_date - timedelta(days=1)
+                sessions_to_draw.append({
+                    'name': 'Globex Open (Sunday)',
+                    'start': datetime.combine(sun_date, time(17, 0)),
+                    'end': datetime.combine(sun_date, time(19, 0)),
+                    'color': SESSION_TIMES['Sydney']['color'],
+                    'border': SESSION_TIMES['Sydney']['border']
+                })
+                
+                # Tokyo (Sunday evening)
+                sessions_to_draw.append({
+                    'name': 'Tokyo',
+                    'start': datetime.combine(sun_date, time(19, 0)),
+                    'end': datetime.combine(next_date, time(2, 0)),
+                    'color': SESSION_TIMES['Tokyo']['color'],
+                    'border': SESSION_TIMES['Tokyo']['border']
+                })
             
             # London
             sessions_to_draw.append({
@@ -1074,10 +1119,17 @@ def main():
         # Quick reference: where are lines right now
         st.markdown("### 📍 Line Values at Key Times")
         
+        # Determine correct overnight date (Sunday for Friday, prior_date otherwise)
+        prior_wd = prior_date.weekday() if hasattr(prior_date, 'weekday') else datetime.combine(prior_date, time(0,0)).weekday()
+        if prior_wd == 4:  # Friday
+            overnight_date = next_date - timedelta(days=1)  # Sunday
+        else:
+            overnight_date = prior_date
+        
         key_times_ct = [
-            ("5:00 PM (Globex Open)", time(17, 0), prior_date),
-            ("8:00 PM (Tokyo Active)", time(20, 0), prior_date),
-            ("10:00 PM", time(22, 0), prior_date),
+            ("5:00 PM (Globex Open)", time(17, 0), overnight_date),
+            ("8:00 PM (Tokyo Active)", time(20, 0), overnight_date),
+            ("10:00 PM", time(22, 0), overnight_date),
             ("12:00 AM", time(0, 0), next_date),
             ("2:00 AM (London Open)", time(2, 0), next_date),
             ("7:30 AM (Data Drop)", time(7, 30), next_date),
