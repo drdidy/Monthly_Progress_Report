@@ -1373,42 +1373,77 @@ def main():
             scan_t += timedelta(minutes=CANDLE_MINUTES)
         time_to_idx = {t: i for i, t in enumerate(master_times)}
         
-        # Readable x-axis labels at key times only
-        tick_vals, tick_texts, last_date = [], [], None
-        for i, t in enumerate(master_times):
-            if (t.hour, t.minute) in [(8,30),(9,0),(12,0),(15,0),(17,0),(20,0),(0,0),(2,0)]:
-                ts = t.strftime('%I:%M%p').lstrip('0').lower()
-                if last_date != t.date():
-                    tick_texts.append(f"{t.strftime('%b %d')}\n{ts}")
-                    last_date = t.date()
-                else:
-                    tick_texts.append(ts)
-                tick_vals.append(i)
+        # ============================================================
+        # Session block labels for x-axis (clean, professional)
+        # ============================================================
+        
+        # Define session blocks with their display names and boundaries
+        prior_wd_chart = prior_date.weekday() if hasattr(prior_date, 'weekday') else datetime.combine(prior_date, time(0,0)).weekday()
+        is_friday_chart = prior_wd_chart == 4
+        overnight_chart = (next_date - timedelta(days=1)) if is_friday_chart else prior_date
+        
+        session_blocks = []
+        
+        # Prior NY session
+        ny1_start = datetime.combine(prior_date, time(8, 30))
+        ny1_end = datetime.combine(prior_date, time(15, 0))
+        day_abbr = prior_date.strftime('%a')
+        session_blocks.append(('NY', f"{day_abbr} NY", ny1_start, ny1_end))
+        
+        if is_friday_chart:
+            # Weekend gap: Fri close to Sun globex open
+            sun_open = datetime.combine(next_date - timedelta(days=1), time(17, 0))
+            session_blocks.append(('Globex', "Sun Globex", sun_open, datetime.combine(next_date - timedelta(days=1), time(19, 0))))
+            session_blocks.append(('Tokyo', "Tokyo", datetime.combine(next_date - timedelta(days=1), time(19, 0)), datetime.combine(next_date, time(2, 0))))
+        else:
+            # Overnight: same day globex through next morning
+            session_blocks.append(('Globex', "Globex Open", datetime.combine(prior_date, time(17, 0)), datetime.combine(prior_date, time(19, 0))))
+            session_blocks.append(('Tokyo', "Tokyo", datetime.combine(prior_date, time(19, 0)), datetime.combine(next_date, time(2, 0))))
+        
+        session_blocks.append(('London', "London", datetime.combine(next_date, time(2, 0)), datetime.combine(next_date, time(8, 30))))
+        
+        next_day_abbr = next_date.strftime('%a')
+        ny2_start = datetime.combine(next_date, time(8, 30))
+        ny2_end = datetime.combine(next_date, time(15, 0))
+        session_blocks.append(('NY2', f"{next_day_abbr} NY", ny2_start, ny2_end))
+        
+        # Build tick labels: one centered label per session block
+        tick_vals = []
+        tick_texts = []
+        
+        for _, label, s_start, s_end in session_blocks:
+            # Find indices within this session
+            s_indices = [i for i, t in enumerate(master_times) if s_start <= t <= s_end]
+            if s_indices:
+                # Place label at center of the block
+                center_idx = s_indices[len(s_indices) // 2]
+                tick_vals.append(center_idx)
+                tick_texts.append(label)
+        
+        # Also add the 9 AM marker between sessions
+        nine_am_dt = datetime.combine(next_date, time(9, 0))
+        if nine_am_dt in time_to_idx:
+            tick_vals.append(time_to_idx[nine_am_dt])
+            tick_texts.append("9AM ▶")
         
         fig = go.Figure()
         
         # Session boxes using candle indices
         if show_session_boxes:
-            prior_wd_chart = prior_date.weekday() if hasattr(prior_date, 'weekday') else datetime.combine(prior_date, time(0,0)).weekday()
-            is_friday_chart = prior_wd_chart == 4
-            overnight_chart = (next_date - timedelta(days=1)) if is_friday_chart else prior_date
+            session_colors = {
+                'NY': ('rgba(66,133,244,0.08)', 'rgba(66,133,244,0.3)'),
+                'Globex': ('rgba(255,215,0,0.05)', 'rgba(255,215,0,0.2)'),
+                'Tokyo': ('rgba(233,30,99,0.05)', 'rgba(233,30,99,0.2)'),
+                'London': ('rgba(0,188,212,0.05)', 'rgba(0,188,212,0.2)'),
+                'NY2': ('rgba(66,133,244,0.08)', 'rgba(66,133,244,0.3)'),
+            }
             
-            session_defs = [
-                ('New York', prior_date, time(8,30), prior_date, time(15,0), 'rgba(66,133,244,0.08)', 'rgba(66,133,244,0.3)'),
-                ('Globex', overnight_chart, time(17,0), overnight_chart, time(19,0), 'rgba(255,215,0,0.05)', 'rgba(255,215,0,0.2)'),
-                ('Tokyo', overnight_chart, time(19,0), next_date, time(2,0), 'rgba(233,30,99,0.05)', 'rgba(233,30,99,0.2)'),
-                ('London', next_date, time(2,0), next_date, time(8,30), 'rgba(0,188,212,0.05)', 'rgba(0,188,212,0.2)'),
-                ('New York', next_date, time(8,30), next_date, time(15,0), 'rgba(66,133,244,0.08)', 'rgba(66,133,244,0.3)'),
-            ]
-            for sname, sd1, st1, sd2, st2, sfill, sborder in session_defs:
-                s_start = datetime.combine(sd1, st1)
-                s_end = datetime.combine(sd2, st2)
-                s_idx = [time_to_idx[t] for t in master_times if s_start <= t <= s_end and t in time_to_idx]
+            for skey, sname, s_start, s_end in session_blocks:
+                sfill, sborder = session_colors.get(skey, ('rgba(128,128,128,0.05)', 'rgba(128,128,128,0.2)'))
+                s_idx = [i for i, t in enumerate(master_times) if s_start <= t <= s_end]
                 if s_idx:
                     fig.add_vrect(x0=min(s_idx), x1=max(s_idx), fillcolor=sfill,
                         line=dict(color=sborder, width=1, dash='dot'))
-                    fig.add_annotation(x=min(s_idx), y=1, yref="paper", text=sname,
-                        showarrow=False, font=dict(size=10, color=sborder), xanchor="left", yshift=10)
         
         
         # 9:00 AM decision line
@@ -1484,9 +1519,10 @@ def main():
         
         fig.update_layout(
             template='plotly_dark', paper_bgcolor='#0a0a0f', plot_bgcolor='#0d1117',
-            height=700, margin=dict(l=60, r=200, t=40, b=100),
-            xaxis=dict(gridcolor='#1a2332', showgrid=True, tickmode='array',
-                tickvals=tick_vals, ticktext=tick_texts, tickangle=-45, tickfont=dict(size=9)),
+            height=700, margin=dict(l=60, r=200, t=40, b=60),
+            xaxis=dict(gridcolor='#1a2332', showgrid=False, tickmode='array',
+                tickvals=tick_vals, ticktext=tick_texts, tickangle=0, 
+                tickfont=dict(size=11, family='Rajdhani', color='#8892b0')),
             yaxis=dict(gridcolor='#1a2332', showgrid=True, tickformat='.2f', side='right'),
             legend=dict(bgcolor='rgba(13,18,32,0.9)', bordercolor='#1e2d4a', borderwidth=1,
                 font=dict(size=10, family='JetBrains Mono'), x=1.01, y=1),
