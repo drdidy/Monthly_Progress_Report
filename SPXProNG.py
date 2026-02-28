@@ -1306,52 +1306,42 @@ def main():
     with tab1:
         st.markdown("### 9:00 AM CT Decision Levels")
         
-        # Display the four key levels
-        col1, col2, col3, col4 = st.columns(4)
+        # Display the four key levels in a uniform CSS grid
+        hw_asc = levels['key_levels']['highest_wick_ascending']
+        hb_asc = levels['key_levels']['highest_bounce_ascending']
+        lr_desc = levels['key_levels']['lowest_rejection_descending']
+        lw_desc = levels['key_levels']['lowest_wick_descending']
         
-        with col1:
-            hw_asc = levels['key_levels']['highest_wick_ascending']
-            if hw_asc:
-                st.markdown(f"""
-                <div class="metric-card">
-                    <div class="metric-label">HW Ascending ↗</div>
-                    <div class="metric-value-bear">{hw_asc['value_at_9am']:.2f}</div>
-                    <div class="metric-label" style="font-size:0.7rem; margin-top:5px;">Anchor: {hw_asc['anchor_price']:.2f}</div>
-                </div>
-                """, unsafe_allow_html=True)
+        cards_html = '<div style="display:grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 10px 0;">'
         
-        with col2:
-            hb_asc = levels['key_levels']['highest_bounce_ascending']
-            if hb_asc:
-                st.markdown(f"""
-                <div class="metric-card">
-                    <div class="metric-label">HB Ascending ↗</div>
-                    <div class="metric-value-bear">{hb_asc['value_at_9am']:.2f}</div>
-                    <div class="metric-label" style="font-size:0.7rem; margin-top:5px;">Anchor: {hb_asc['anchor_price']:.2f}</div>
-                </div>
-                """, unsafe_allow_html=True)
+        for label, level, color_class in [
+            ("HW Ascending ↗", hw_asc, "bear"),
+            ("HB Ascending ↗", hb_asc, "bear"),
+            ("LR Descending ↘", lr_desc, "bull"),
+            ("LW Descending ↘", lw_desc, "bull"),
+        ]:
+            if level:
+                val = f"{level['value_at_9am']:.2f}"
+                anchor = f"{level['anchor_price']:.2f}"
+                color = "#ff1744" if color_class == "bear" else "#00e676"
+            else:
+                val = "—"
+                anchor = "—"
+                color = "#5a6a8a"
+            
+            cards_html += f"""
+            <div style="background: linear-gradient(145deg, #131a2e 0%, #0d1220 100%);
+                        border: 1px solid #1e2d4a; border-radius: 12px; padding: 20px;
+                        box-shadow: 0 4px 20px rgba(0,0,0,0.3); text-align: center;">
+                <div style="font-family: 'Rajdhani', sans-serif; color: #5a6a8a; font-size: 0.8rem;
+                            text-transform: uppercase; letter-spacing: 2px;">{label}</div>
+                <div style="font-family: 'JetBrains Mono', monospace; color: {color};
+                            font-size: 1.6rem; font-weight: 700; margin: 8px 0;">{val}</div>
+                <div style="font-family: 'Rajdhani', sans-serif; color: #5a6a8a; font-size: 0.7rem;">Anchor: {anchor}</div>
+            </div>"""
         
-        with col3:
-            lr_desc = levels['key_levels']['lowest_rejection_descending']
-            if lr_desc:
-                st.markdown(f"""
-                <div class="metric-card">
-                    <div class="metric-label">LR Descending ↘</div>
-                    <div class="metric-value-bull">{lr_desc['value_at_9am']:.2f}</div>
-                    <div class="metric-label" style="font-size:0.7rem; margin-top:5px;">Anchor: {lr_desc['anchor_price']:.2f}</div>
-                </div>
-                """, unsafe_allow_html=True)
-        
-        with col4:
-            lw_desc = levels['key_levels']['lowest_wick_descending']
-            if lw_desc:
-                st.markdown(f"""
-                <div class="metric-card">
-                    <div class="metric-label">LW Descending ↘</div>
-                    <div class="metric-value-bull">{lw_desc['value_at_9am']:.2f}</div>
-                    <div class="metric-label" style="font-size:0.7rem; margin-top:5px;">Anchor: {lw_desc['anchor_price']:.2f}</div>
-                </div>
-                """, unsafe_allow_html=True)
+        cards_html += '</div>'
+        st.markdown(cards_html, unsafe_allow_html=True)
         
         st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
         
