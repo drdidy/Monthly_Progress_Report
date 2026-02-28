@@ -185,9 +185,9 @@ def count_candles_between(start_dt: datetime, end_dt: datetime) -> int:
     up to (but not including) end_dt's candle.
     
     Skips:
-    - Maintenance window: 4:00 PM - 5:00 PM CT daily
-    - Weekend closure: Friday 5:00 PM CT through Sunday 5:00 PM CT
-      (Saturday all day, Sunday before 5:00 PM CT)
+    - Maintenance window: 4:00 PM - 5:00 PM CT Mon-Thu only
+    - Weekend closure: Friday 4:00 PM CT through Sunday 5:00 PM CT
+      (Friday evening, Saturday all day, Sunday before 5:00 PM CT)
     """
     if end_dt <= start_dt:
         return 0
@@ -198,19 +198,23 @@ def count_candles_between(start_dt: datetime, end_dt: datetime) -> int:
     while current < end_dt:
         current += timedelta(minutes=CANDLE_MINUTES)
         current_time = current.time()
-        weekday = current.weekday()  # 0=Monday, 5=Saturday, 6=Sunday
-        
-        # Skip maintenance window (4:00 PM - 5:00 PM CT) every day
-        if MAINTENANCE_START_CT <= current_time < MAINTENANCE_END_CT:
-            continue
+        weekday = current.weekday()  # 0=Monday, 4=Friday, 5=Saturday, 6=Sunday
         
         # Skip all of Saturday (weekday 5)
         if weekday == 5:
             continue
         
         # Skip Sunday before 5:00 PM CT (weekday 6)
-        # Sunday 5:00 PM CT = globex open for Monday's session
         if weekday == 6 and current_time < MAINTENANCE_END_CT:
+            continue
+        
+        # Skip Friday after market close at 4:00 PM CT (weekday 4)
+        # Market closes Friday at 4pm, no evening globex session
+        if weekday == 4 and current_time >= MAINTENANCE_START_CT:
+            continue
+        
+        # Skip maintenance window (4:00 PM - 5:00 PM CT) Mon-Thu
+        if MAINTENANCE_START_CT <= current_time < MAINTENANCE_END_CT:
             continue
         
         count += 1
@@ -251,16 +255,20 @@ def generate_line_series(anchor_price: float, anchor_time: datetime,
         current_time_only = current.time()
         weekday = current.weekday()
         
-        # Skip maintenance window
-        if MAINTENANCE_START_CT <= current_time_only < MAINTENANCE_END_CT:
-            continue
-        
         # Skip Saturday entirely
         if weekday == 5:
             continue
         
         # Skip Sunday before 5:00 PM CT
         if weekday == 6 and current_time_only < MAINTENANCE_END_CT:
+            continue
+        
+        # Skip Friday after 4:00 PM CT (no evening session)
+        if weekday == 4 and current_time_only >= MAINTENANCE_START_CT:
+            continue
+        
+        # Skip maintenance window (4:00 PM - 5:00 PM CT) Mon-Thu
+        if MAINTENANCE_START_CT <= current_time_only < MAINTENANCE_END_CT:
             continue
         
         value = calculate_line_value(anchor_price, anchor_time, current, direction)
