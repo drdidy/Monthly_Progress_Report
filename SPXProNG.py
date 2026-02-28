@@ -60,6 +60,12 @@ st.markdown("""
         padding: 20px;
         margin: 8px 0;
         box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+        min-height: 140px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        text-align: center;
     }
     
     .metric-label {
@@ -1308,7 +1314,7 @@ def main():
             if hw_asc:
                 st.markdown(f"""
                 <div class="metric-card">
-                    <div class="metric-label">Highest Wick Ascending</div>
+                    <div class="metric-label">HW Ascending ↗</div>
                     <div class="metric-value-bear">{hw_asc['value_at_9am']:.2f}</div>
                     <div class="metric-label" style="font-size:0.7rem; margin-top:5px;">Anchor: {hw_asc['anchor_price']:.2f}</div>
                 </div>
@@ -1319,7 +1325,7 @@ def main():
             if hb_asc:
                 st.markdown(f"""
                 <div class="metric-card">
-                    <div class="metric-label">Highest Bounce Ascending</div>
+                    <div class="metric-label">HB Ascending ↗</div>
                     <div class="metric-value-bear">{hb_asc['value_at_9am']:.2f}</div>
                     <div class="metric-label" style="font-size:0.7rem; margin-top:5px;">Anchor: {hb_asc['anchor_price']:.2f}</div>
                 </div>
@@ -1330,7 +1336,7 @@ def main():
             if lr_desc:
                 st.markdown(f"""
                 <div class="metric-card">
-                    <div class="metric-label">Lowest Rejection Descending</div>
+                    <div class="metric-label">LR Descending ↘</div>
                     <div class="metric-value-bull">{lr_desc['value_at_9am']:.2f}</div>
                     <div class="metric-label" style="font-size:0.7rem; margin-top:5px;">Anchor: {lr_desc['anchor_price']:.2f}</div>
                 </div>
@@ -1341,7 +1347,7 @@ def main():
             if lw_desc:
                 st.markdown(f"""
                 <div class="metric-card">
-                    <div class="metric-label">Lowest Wick Descending</div>
+                    <div class="metric-label">LW Descending ↘</div>
                     <div class="metric-value-bull">{lw_desc['value_at_9am']:.2f}</div>
                     <div class="metric-label" style="font-size:0.7rem; margin-top:5px;">Anchor: {lw_desc['anchor_price']:.2f}</div>
                 </div>
