@@ -703,6 +703,32 @@ def apply_offset(items: list, offset: float) -> list:
     return [{'price': item['price'] - offset, 'time': item['time']} for item in items]
 
 
+def fetch_live_price() -> dict:
+    """Fetch current ES=F price from yfinance for live tracking."""
+    try:
+        import yfinance as yf
+        es = yf.Ticker("ES=F")
+        data = es.history(period="1d", interval="1m")
+        if len(data) > 0:
+            last = data.iloc[-1]
+            last_time = data.index[-1]
+            if hasattr(last_time, 'tz') and last_time.tz is not None:
+                import pytz
+                ct = pytz.timezone('America/Chicago')
+                last_time = last_time.tz_convert(ct).tz_localize(None)
+            return {
+                'ok': True,
+                'price': float(last['Close']),
+                'high': float(last['High']),
+                'low': float(last['Low']),
+                'time': last_time,
+                'source': 'ES=F'
+            }
+        return {'ok': False, 'error': 'No data', 'price': 0}
+    except Exception as e:
+        return {'ok': False, 'error': str(e), 'price': 0}
+
+
 # ============================================================
 # AUTO-DETECTION ENGINE
 # Detect bounces, rejections, and wick extremes from candle data
@@ -869,6 +895,9 @@ def main():
     st.markdown('<div class="main-header">SPX Prophet Next Gen</div>', unsafe_allow_html=True)
     st.markdown('<div class="sub-header">Structural Rate Engine • Futures & Options</div>', unsafe_allow_html=True)
     
+    # Live price tracking toggle
+    live_mode = st.toggle("🔴 LIVE MODE", value=False, help="Auto-refresh every 30 seconds with current ES price")
+    
     # ============================================================
     # SIDEBAR: Input Panel
     # ============================================================
@@ -963,6 +992,7 @@ def main():
                             value=auto_spread, step=0.25, format="%.2f",
                             help="Subtracted from ES prices to approximate SPX levels. Positive = ES trades above SPX."
                         )
+                        st.session_state['_es_offset'] = es_offset
                         
                         # Apply offset to detected values
                         if es_offset != 0:
@@ -1154,6 +1184,98 @@ def main():
     levels = calculate_nine_am_levels(bounces, rejections, highest_wick, lowest_wick, next_day_dt)
     
     # ============================================================
+    # LIVE PRICE TRACKING
+    # ============================================================
+    live_price_data = None
+    es_offset_val = st.session_state.get('_es_offset', 0.0)
+    
+    if live_mode:
+        # Auto-refresh every 30 seconds
+        try:
+            from streamlit_autorefresh import st_autorefresh
+            st_autorefresh(interval=30000, limit=None, key="live_refresh")
+        except ImportError:
+            # Fallback: manual refresh button
+            st.caption("⚠️ Install `streamlit-autorefresh` for auto-polling. Using manual refresh.")
+            if st.button("🔄 Refresh Price", key="manual_refresh"):
+                st.rerun()
+        
+        live_price_data = fetch_live_price()
+        
+        if live_price_data['ok']:
+            es_price = live_price_data['price']
+            spx_price = es_price - es_offset_val
+            price_time = live_price_data['time']
+            time_str = price_time.strftime('%I:%M:%S %p') if hasattr(price_time, 'strftime') else str(price_time)
+            
+            # Get level values
+            hw_val_live = levels['key_levels']['highest_wick_ascending']['value_at_9am'] if levels['key_levels']['highest_wick_ascending'] else None
+            hb_val_live = levels['key_levels']['highest_bounce_ascending']['value_at_9am'] if levels['key_levels']['highest_bounce_ascending'] else None
+            lr_val_live = levels['key_levels']['lowest_rejection_descending']['value_at_9am'] if levels['key_levels']['lowest_rejection_descending'] else None
+            lw_val_live = levels['key_levels']['lowest_wick_descending']['value_at_9am'] if levels['key_levels']['lowest_wick_descending'] else None
+            
+            # Determine live position
+            all_levels = {}
+            if hw_val_live: all_levels['HW Asc'] = hw_val_live
+            if hb_val_live: all_levels['HB Asc'] = hb_val_live
+            if lr_val_live: all_levels['LR Desc'] = lr_val_live
+            if lw_val_live: all_levels['LW Desc'] = lw_val_live
+            
+            # Live signal
+            live_signal = ""
+            live_color = "#ffd740"
+            if hw_val_live and hb_val_live and lr_val_live and lw_val_live:
+                asc_h = max(hw_val_live, hb_val_live)
+                asc_l = min(hw_val_live, hb_val_live)
+                desc_h = max(lr_val_live, lw_val_live)
+                desc_l = min(lr_val_live, lw_val_live)
+                
+                if spx_price > asc_h:
+                    live_signal = "BULLISH TREND DAY"
+                    live_color = "#00e676"
+                elif spx_price >= asc_l:
+                    live_signal = "BETWEEN ASCENDING"
+                    live_color = "#ffd740"
+                elif spx_price > desc_h:
+                    live_signal = "BEARISH BIAS"
+                    live_color = "#ff5252"
+                elif spx_price >= desc_l:
+                    live_signal = "BETWEEN DESCENDING"
+                    live_color = "#ffd740"
+                else:
+                    live_signal = "BEARISH TREND DAY"
+                    live_color = "#ff1744"
+            
+            # Distances
+            distances = []
+            for name, val in sorted(all_levels.items(), key=lambda x: x[1], reverse=True):
+                diff = spx_price - val
+                arrow = "▲" if diff > 0 else "▼"
+                distances.append(f"{name}: {val:.2f} ({arrow}{abs(diff):.2f})")
+            
+            # Display live banner
+            offset_note = f" (offset {es_offset_val:+.1f})" if es_offset_val != 0 else ""
+            st.markdown(f"""
+            <div style="background: linear-gradient(135deg, #0d1117 0%, #131a2e 100%); border: 2px solid {live_color}; 
+                        border-radius: 12px; padding: 15px; margin: 10px 0; text-align: center;">
+                <div style="font-family: 'Rajdhani'; color: #8892b0; font-size: 0.85rem;">
+                    🔴 LIVE • ES=F @ {time_str}{offset_note}
+                </div>
+                <div style="font-family: 'Orbitron'; font-size: 2.2rem; color: {live_color}; margin: 5px 0;">
+                    {spx_price:.2f}
+                </div>
+                <div style="font-family: 'Orbitron'; font-size: 1rem; color: {live_color};">
+                    {live_signal}
+                </div>
+                <div style="font-family: 'JetBrains Mono'; font-size: 0.8rem; color: #8892b0; margin-top: 8px;">
+                    {'  •  '.join(distances)}
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.warning(f"Live price unavailable: {live_price_data.get('error', 'Unknown')}")
+    
+    # ============================================================
     # MAIN CONTENT: Tabs
     # ============================================================
     
@@ -1343,6 +1465,15 @@ def main():
             fig.add_trace(go.Scatter(x=[time_to_idx[lowest_wick['time']]], y=[lowest_wick['price']],
                 mode='markers', marker=dict(symbol='diamond', size=14, color='#00e676', line=dict(width=2, color='white')), showlegend=False))
         
+        # Live price line on chart
+        if live_mode and live_price_data and live_price_data.get('ok'):
+            live_spx = live_price_data['price'] - es_offset_val
+            # Full-width horizontal dashed line
+            fig.add_hline(y=live_spx, line_dash="dot", line_color="#ffd740", line_width=2,
+                          annotation_text=f"LIVE {live_spx:.2f}",
+                          annotation_position="right",
+                          annotation_font=dict(color="#ffd740", size=12, family="Orbitron"))
+        
         fig.update_layout(
             template='plotly_dark', paper_bgcolor='#0a0a0f', plot_bgcolor='#0d1117',
             height=700, margin=dict(l=60, r=200, t=40, b=100),
@@ -1475,9 +1606,15 @@ def main():
         # 9 AM Read
         st.markdown("### 🎯 9:00 AM Decision Framework")
         
-        current_price = st.number_input("Current SPX Price (at 9:00 AM CT)", 
-                                         value=6865.0, step=0.5, format="%.2f",
-                                         key="current_spx")
+        # Auto-fill from live price if available
+        default_price = 6865.0
+        if live_mode and live_price_data and live_price_data.get('ok'):
+            default_price = live_price_data['price'] - es_offset_val
+        
+        current_price = st.number_input("Current SPX Price", 
+                                         value=default_price, step=0.5, format="%.2f",
+                                         key="current_spx",
+                                         help="Auto-filled from live ES price when LIVE MODE is on")
         
         # Determine position relative to lines
         hw_val = levels['key_levels']['highest_wick_ascending']['value_at_9am'] if levels['key_levels']['highest_wick_ascending'] else None
