@@ -5,6 +5,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta, time
 import json
+import requests
 
 # ============================================================
 # SPX PROPHET NEXT GEN v1.0
@@ -475,6 +476,331 @@ SESSION_TIMES = {
 
 
 # ============================================================
+# DATA SOURCE MODULE
+# Tastytrade (primary) → yfinance (fallback) → Manual (always available)
+# ============================================================
+
+class DataSourceStatus:
+    """Track data source status for display"""
+    def __init__(self):
+        self.tastytrade_ok = False
+        self.yfinance_ok = False
+        self.source_used = "manual"
+        self.error_msg = ""
+        self.candles = None  # DataFrame with OHLC 30-min candles
+
+
+def fetch_tastytrade_token_from_secrets() -> dict:
+    """Authenticate with Tastytrade using OAuth credentials from st.secrets."""
+    try:
+        tt = st.secrets.get("tastytrade", {})
+        client_id = tt.get("client_id")
+        client_secret = tt.get("client_secret")
+        refresh_token = tt.get("refresh_token")
+        
+        if not all([client_id, client_secret, refresh_token]):
+            return {'ok': False, 'error': "Missing tastytrade secrets (client_id, client_secret, refresh_token)"}
+        
+        # Get access token from refresh token
+        resp = requests.post(
+            "https://api.tastytrade.com/oauth/token",
+            data={
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+                "client_id": client_id,
+                "client_secret": client_secret,
+            },
+            timeout=15
+        )
+        
+        if resp.status_code == 200:
+            access_token = resp.json().get('access_token', '')
+            if access_token:
+                return {'ok': True, 'token': access_token, 'auth_type': 'oauth'}
+            return {'ok': False, 'error': "No access token in response"}
+        
+        # If OAuth fails, try session login as fallback
+        username = tt.get("username")
+        password = tt.get("password")
+        if username and password:
+            resp2 = requests.post(
+                "https://api.tastytrade.com/sessions",
+                json={"login": username, "password": password, "remember-me": True},
+                timeout=15
+            )
+            if resp2.status_code == 201:
+                token = resp2.json().get('data', {}).get('session-token', '')
+                if token:
+                    return {'ok': True, 'token': token, 'auth_type': 'session'}
+        
+        return {'ok': False, 'error': f"OAuth failed (HTTP {resp.status_code}): {resp.text[:100]}"}
+    except KeyError:
+        return {'ok': False, 'error': "No [tastytrade] section in Streamlit secrets"}
+    except requests.exceptions.ConnectionError:
+        return {'ok': False, 'error': "Cannot reach Tastytrade API"}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+
+
+def fetch_tastytrade_candles(token: str, auth_type: str, symbol: str, 
+                              start_date: str, end_date: str) -> dict:
+    """
+    Fetch 30-min candles from Tastytrade market data API.
+    symbol: e.g. '/ES' for E-mini S&P futures
+    auth_type: 'oauth' or 'session'
+    start_date/end_date: 'YYYY-MM-DD'
+    """
+    try:
+        if auth_type == 'oauth':
+            headers = {"Authorization": f"Bearer {token}"}
+        else:
+            headers = {"Authorization": token}
+        
+        # Tastytrade market data endpoint for futures candles
+        # Try multiple endpoint patterns
+        endpoints = [
+            f"https://api.tastytrade.com/market-data/futures/{symbol}/candles",
+            f"https://api.tastytrade.com/market-data/by-symbol/{symbol}/candles",
+            f"https://api.tastytrade.com/api-quote-tokens",  # may need quote token first
+        ]
+        
+        params = {
+            "resolution": "30min",
+            "start-date": start_date,
+            "end-date": end_date,
+        }
+        
+        last_error = ""
+        for url in endpoints[:2]:  # Try first two endpoints
+            resp = requests.get(url, headers=headers, params=params, timeout=30)
+            
+            if resp.status_code == 200:
+                data = resp.json()
+                candles = data.get('data', {}).get('candles', [])
+                if not candles:
+                    # Try alternate data structure
+                    candles = data.get('data', [])
+                    if isinstance(candles, dict):
+                        candles = candles.get('items', [])
+                
+                if candles:
+                    df = pd.DataFrame(candles)
+                    # Normalize column names
+                    col_map = {}
+                    for col in df.columns:
+                        cl = col.lower().replace('-', '_').replace(' ', '_')
+                        if 'time' in cl or 'date' in cl:
+                            col_map[col] = 'datetime'
+                        elif cl == 'open':
+                            col_map[col] = 'open'
+                        elif cl == 'high':
+                            col_map[col] = 'high'
+                        elif cl == 'low':
+                            col_map[col] = 'low'
+                        elif cl == 'close':
+                            col_map[col] = 'close'
+                        elif cl == 'volume':
+                            col_map[col] = 'volume'
+                    df = df.rename(columns=col_map)
+                    
+                    if 'datetime' in df.columns:
+                        df['datetime'] = pd.to_datetime(df['datetime'])
+                        df = df.sort_values('datetime').reset_index(drop=True)
+                        return {'ok': True, 'data': df}
+            
+            last_error = f"HTTP {resp.status_code}: {resp.text[:200]}"
+        
+        return {'ok': False, 'error': f"All endpoints failed. Last: {last_error}"}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+
+
+def fetch_yfinance_candles(start_date: str, end_date: str) -> dict:
+    """
+    Fallback: fetch ES 30-min candles from Yahoo Finance.
+    """
+    try:
+        import yfinance as yf
+        es = yf.Ticker("ES=F")
+        # yfinance needs period or start/end
+        df = es.history(start=start_date, end=end_date, interval="30m")
+        if len(df) > 0:
+            df = df.reset_index()
+            df.columns = [c.lower().replace(' ', '_') for c in df.columns]
+            # Rename 'datetime' or 'date' column
+            if 'datetime' not in df.columns and 'date' in df.columns:
+                df = df.rename(columns={'date': 'datetime'})
+            elif 'datetime' not in df.columns:
+                df = df.rename(columns={df.columns[0]: 'datetime'})
+            df['datetime'] = pd.to_datetime(df['datetime'])
+            df = df.sort_values('datetime').reset_index(drop=True)
+            return {'ok': True, 'data': df}
+        return {'ok': False, 'error': 'No data returned from Yahoo Finance'}
+    except ImportError:
+        return {'ok': False, 'error': 'yfinance not installed'}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+
+
+def fetch_es_candles(prior_date, next_date) -> DataSourceStatus:
+    """
+    Master fetcher: tries Tastytrade (from st.secrets) first, then yfinance, reports status.
+    Returns DataSourceStatus with candles and status info.
+    """
+    status = DataSourceStatus()
+    
+    start_str = prior_date.strftime('%Y-%m-%d')
+    end_str = (next_date + timedelta(days=1)).strftime('%Y-%m-%d')
+    
+    # Try Tastytrade first (credentials from st.secrets)
+    auth = fetch_tastytrade_token_from_secrets()
+    if auth['ok']:
+        result = fetch_tastytrade_candles(auth['token'], auth['auth_type'], '/ES', start_str, end_str)
+        if result['ok']:
+            status.tastytrade_ok = True
+            status.source_used = "tastytrade"
+            status.candles = result['data']
+            return status
+        else:
+            status.error_msg = f"TT data: {result['error']}"
+    else:
+        status.error_msg = f"TT auth: {auth['error']}"
+    
+    # Fallback to yfinance
+    result = fetch_yfinance_candles(start_str, end_str)
+    if result['ok']:
+        status.yfinance_ok = True
+        status.source_used = "yfinance"
+        status.candles = result['data']
+        return status
+    
+    status.error_msg += f" | yfinance: {result['error']}"
+    status.source_used = "manual"
+    return status
+
+
+# ============================================================
+# AUTO-DETECTION ENGINE
+# Detect bounces, rejections, and wick extremes from candle data
+# ============================================================
+
+def filter_ny_session(df: pd.DataFrame, session_date) -> pd.DataFrame:
+    """
+    Filter candles to only the NY regular session: 8:30 AM - 3:00 PM CT.
+    Assumes datetime column is in the DataFrame.
+    """
+    session_start = datetime.combine(session_date, time(8, 30))
+    session_end = datetime.combine(session_date, time(15, 0))
+    
+    mask = (df['datetime'] >= session_start) & (df['datetime'] <= session_end)
+    return df[mask].copy().reset_index(drop=True)
+
+
+def detect_inflections(ny_candles: pd.DataFrame) -> dict:
+    """
+    Auto-detect bounces and rejections from 30-min candle data.
+    
+    Uses LINE CHART logic: closing prices only for bounces/rejections.
+    
+    Bounce = trough: close[i] < close[i-1] AND close[i] < close[i+1]
+      (price dipped and reversed up)
+    
+    Rejection = peak: close[i] > close[i-1] AND close[i] > close[i+1]
+      (price pushed up and reversed down)
+    
+    Highest Wick = highest HIGH of a BEARISH candle (close < open)
+      - Exclude if the first bearish candle is at 8:30 AM
+    
+    Lowest Wick = lowest LOW of a BULLISH candle (close > open)
+      - Exclude if the first bullish candle is at 8:30 AM
+    """
+    if len(ny_candles) < 3:
+        return {'bounces': [], 'rejections': [], 'highest_wick': None, 'lowest_wick': None}
+    
+    closes = ny_candles['close'].values
+    times = ny_candles['datetime'].values
+    opens = ny_candles['open'].values
+    highs = ny_candles['high'].values
+    lows = ny_candles['low'].values
+    
+    bounces = []
+    rejections = []
+    
+    # Detect bounces and rejections from closing prices (line chart)
+    for i in range(1, len(closes) - 1):
+        t = pd.Timestamp(times[i]).to_pydatetime()
+        
+        # Bounce: local trough in closing prices
+        if closes[i] < closes[i-1] and closes[i] < closes[i+1]:
+            bounces.append({'price': float(closes[i]), 'time': t})
+        
+        # Rejection: local peak in closing prices
+        if closes[i] > closes[i-1] and closes[i] > closes[i+1]:
+            rejections.append({'price': float(closes[i]), 'time': t})
+    
+    # Highest wick: highest HIGH of a BEARISH candle (close < open)
+    # Exclude if the first bearish candle is at 8:30 AM
+    bearish_mask = closes < opens
+    first_bearish_idx = None
+    for idx in range(len(bearish_mask)):
+        if bearish_mask[idx]:
+            first_bearish_idx = idx
+            break
+    
+    highest_wick = None
+    if bearish_mask.any():
+        bearish_candles = ny_candles[bearish_mask].copy()
+        
+        # Exclude the first bearish candle if it's 8:30 AM
+        if first_bearish_idx is not None:
+            first_bearish_time = pd.Timestamp(times[first_bearish_idx]).to_pydatetime()
+            if first_bearish_time.hour == 8 and first_bearish_time.minute == 30:
+                bearish_candles = bearish_candles.iloc[1:] if len(bearish_candles) > 1 else bearish_candles.iloc[0:0]
+        
+        if len(bearish_candles) > 0:
+            hw_idx = bearish_candles['high'].idxmax()
+            hw_row = ny_candles.loc[hw_idx]
+            highest_wick = {
+                'price': float(hw_row['high']),
+                'time': pd.Timestamp(hw_row['datetime']).to_pydatetime()
+            }
+    
+    # Lowest wick: lowest LOW of a BULLISH candle (close > open)
+    # Exclude if the first bullish candle is at 8:30 AM
+    bullish_mask = closes > opens
+    first_bullish_idx = None
+    for idx in range(len(bullish_mask)):
+        if bullish_mask[idx]:
+            first_bullish_idx = idx
+            break
+    
+    lowest_wick = None
+    if bullish_mask.any():
+        bullish_candles = ny_candles[bullish_mask].copy()
+        
+        # Exclude the first bullish candle if it's 8:30 AM
+        if first_bullish_idx is not None:
+            first_bullish_time = pd.Timestamp(times[first_bullish_idx]).to_pydatetime()
+            if first_bullish_time.hour == 8 and first_bullish_time.minute == 30:
+                bullish_candles = bullish_candles.iloc[1:] if len(bullish_candles) > 1 else bullish_candles.iloc[0:0]
+        
+        if len(bullish_candles) > 0:
+            lw_idx = bullish_candles['low'].idxmin()
+            lw_row = ny_candles.loc[lw_idx]
+            lowest_wick = {
+                'price': float(lw_row['low']),
+                'time': pd.Timestamp(lw_row['datetime']).to_pydatetime()
+            }
+    
+    return {
+        'bounces': bounces,
+        'rejections': rejections,
+        'highest_wick': highest_wick,
+        'lowest_wick': lowest_wick,
+    }
+
+
+# ============================================================
 # MAIN APPLICATION
 # ============================================================
 
@@ -500,83 +826,218 @@ def main():
                                    help="The day you're projecting lines into")
         
         st.markdown("---")
-        st.markdown("### 🔺 Bounces (Line Chart Troughs)")
-        st.markdown("*Close prices where price dipped and reversed up*")
         
-        num_bounces = st.number_input("Number of bounces", min_value=0, max_value=8, value=2, key="num_bounces")
+        # Data Source Selection
+        st.markdown("### 📡 Data Source")
+        data_mode = st.radio(
+            "How to get ES data:",
+            ["Auto (Tastytrade → yfinance)", "Manual Input"],
+            index=0,
+            help="Auto tries Tastytrade first, then Yahoo Finance. Manual lets you enter values from TradingView."
+        )
         
+        # Initialize variables
         bounces = []
-        for i in range(num_bounces):
-            col1, col2 = st.columns(2)
-            with col1:
-                price = st.number_input(f"Bounce {i+1} Price", 
-                                        value=6860.0, step=0.5, key=f"bounce_price_{i}",
-                                        format="%.2f")
-            with col2:
-                hour = st.selectbox(f"Hour", 
-                                    options=list(range(8, 16)),
-                                    index=2, key=f"bounce_hour_{i}",
-                                    format_func=lambda x: f"{x}:00" if x < 12 else f"{x-12 if x > 12 else 12}:00 PM")
-                minute = st.selectbox(f"Min",
-                                      options=[0, 30],
-                                      index=0, key=f"bounce_min_{i}")
-            
-            bounce_time = datetime.combine(prior_date, time(hour, minute))
-            bounces.append({'price': price, 'time': bounce_time})
-        
-        st.markdown("---")
-        st.markdown("### 🔻 Rejections (Line Chart Peaks)")
-        st.markdown("*Close prices where price pushed up and reversed down*")
-        
-        num_rejections = st.number_input("Number of rejections", min_value=0, max_value=8, value=2, key="num_rejections")
-        
         rejections = []
-        for i in range(num_rejections):
+        highest_wick = {'price': 6920.0, 'time': datetime.combine(prior_date, time(10, 0))}
+        lowest_wick = {'price': 6840.0, 'time': datetime.combine(prior_date, time(14, 0))}
+        data_status = DataSourceStatus()
+        
+        if data_mode == "Auto (Tastytrade → yfinance)":
+            # Check if secrets are configured
+            has_secrets = False
+            try:
+                tt = st.secrets.get("tastytrade", {})
+                has_secrets = bool(tt.get("client_id") and tt.get("refresh_token"))
+            except:
+                pass
+            
+            if has_secrets:
+                st.caption("🔑 Tastytrade credentials loaded from secrets")
+            else:
+                st.warning("⚠️ No [tastytrade] section in secrets.toml. Will try yfinance only.")
+            
+            fetch_btn = st.button("🔄 Fetch ES Data", use_container_width=True)
+            
+            # Status display
+            if fetch_btn or st.session_state.get('last_fetch_status'):
+                if fetch_btn:
+                    with st.spinner("Fetching ES candle data..."):
+                        data_status = fetch_es_candles(prior_date, next_date)
+                        st.session_state['last_fetch_status'] = data_status
+                        st.session_state['last_fetch_candles'] = data_status.candles
+                else:
+                    data_status = st.session_state.get('last_fetch_status', DataSourceStatus())
+                
+                # Show connection status
+                if data_status.source_used == "tastytrade":
+                    st.success("✅ **Tastytrade** — Connected")
+                elif data_status.source_used == "yfinance":
+                    st.warning("⚠️ **yfinance** — Tastytrade unavailable")
+                    if data_status.error_msg:
+                        st.caption(f"TT: {data_status.error_msg.split('|')[0].strip()}")
+                else:
+                    st.error("❌ **No data source available**")
+                    if data_status.error_msg:
+                        st.caption(data_status.error_msg)
+                    st.info("Falling back to manual input below.")
+                
+                # If we got candle data, run auto-detection
+                if data_status.candles is not None and len(data_status.candles) > 0:
+                    ny_candles = filter_ny_session(data_status.candles, prior_date)
+                    
+                    if len(ny_candles) >= 3:
+                        detected = detect_inflections(ny_candles)
+                        
+                        st.markdown("---")
+                        st.markdown("### 🔍 Auto-Detected")
+                        
+                        # Bounces
+                        if detected['bounces']:
+                            st.markdown(f"**Bounces found: {len(detected['bounces'])}**")
+                            for b in detected['bounces']:
+                                st.caption(f"↗ {b['price']:.2f} @ {b['time'].strftime('%I:%M %p')}")
+                            bounces = detected['bounces']
+                        else:
+                            st.caption("No bounces detected")
+                        
+                        # Rejections
+                        if detected['rejections']:
+                            st.markdown(f"**Rejections found: {len(detected['rejections'])}**")
+                            for r in detected['rejections']:
+                                st.caption(f"↘ {r['price']:.2f} @ {r['time'].strftime('%I:%M %p')}")
+                            rejections = detected['rejections']
+                        else:
+                            st.caption("No rejections detected")
+                        
+                        # Highest wick (bearish candle)
+                        if detected['highest_wick']:
+                            hw = detected['highest_wick']
+                            st.markdown(f"**Highest Wick (bearish): {hw['price']:.2f}** @ {hw['time'].strftime('%I:%M %p')}")
+                            highest_wick = hw
+                        else:
+                            st.caption("No bearish candle wick found")
+                        
+                        # Lowest wick (bullish candle)
+                        if detected['lowest_wick']:
+                            lw = detected['lowest_wick']
+                            st.markdown(f"**Lowest Wick (bullish): {lw['price']:.2f}** @ {lw['time'].strftime('%I:%M %p')}")
+                            lowest_wick = lw
+                        else:
+                            st.caption("No bullish candle wick found")
+                        
+                        st.markdown("---")
+                        st.markdown("### ✏️ Override Auto-Detection")
+                        st.caption("Edit any value below to override what was detected.")
+                        
+                        # Allow manual override of auto-detected values
+                        override_bounces = st.checkbox("Override bounces", value=False, key="override_b")
+                        override_rejections = st.checkbox("Override rejections", value=False, key="override_r")
+                        override_wicks = st.checkbox("Override wicks", value=False, key="override_w")
+                    else:
+                        st.warning(f"Only {len(ny_candles)} NY session candles found. Need at least 3.")
+                        data_status.source_used = "manual"
+                else:
+                    if fetch_btn:
+                        st.info("No candle data retrieved. Use manual input.")
+            
+            # If overriding or no data, show manual inputs
+            show_manual_bounces = (data_status.source_used == "manual" or 
+                                    st.session_state.get('override_b', False))
+            show_manual_rejections = (data_status.source_used == "manual" or 
+                                       st.session_state.get('override_r', False))
+            show_manual_wicks = (data_status.source_used == "manual" or 
+                                  st.session_state.get('override_w', False))
+        else:
+            # Full manual mode
+            show_manual_bounces = True
+            show_manual_rejections = True
+            show_manual_wicks = True
+        
+        # Manual input sections (shown when needed)
+        if show_manual_bounces:
+            st.markdown("---")
+            st.markdown("### 🔺 Bounces (Line Chart Troughs)")
+            st.markdown("*Close prices where price dipped and reversed up*")
+            
+            num_bounces = st.number_input("Number of bounces", min_value=0, max_value=8, value=2, key="num_bounces")
+            
+            bounces = []
+            for i in range(num_bounces):
+                col1, col2 = st.columns(2)
+                with col1:
+                    price = st.number_input(f"Bounce {i+1} Price", 
+                                            value=6860.0, step=0.5, key=f"bounce_price_{i}",
+                                            format="%.2f")
+                with col2:
+                    hour = st.selectbox(f"Hour", 
+                                        options=list(range(8, 16)),
+                                        index=2, key=f"bounce_hour_{i}",
+                                        format_func=lambda x: f"{x}:00" if x < 12 else f"{x-12 if x > 12 else 12}:00 PM")
+                    minute = st.selectbox(f"Min",
+                                          options=[0, 30],
+                                          index=0, key=f"bounce_min_{i}")
+                
+                bounce_time = datetime.combine(prior_date, time(hour, minute))
+                bounces.append({'price': price, 'time': bounce_time})
+        
+        if show_manual_rejections:
+            st.markdown("---")
+            st.markdown("### 🔻 Rejections (Line Chart Peaks)")
+            st.markdown("*Close prices where price pushed up and reversed down*")
+            
+            num_rejections = st.number_input("Number of rejections", min_value=0, max_value=8, value=2, key="num_rejections")
+            
+            rejections = []
+            for i in range(num_rejections):
+                col1, col2 = st.columns(2)
+                with col1:
+                    price = st.number_input(f"Rejection {i+1} Price",
+                                            value=6910.0, step=0.5, key=f"rej_price_{i}",
+                                            format="%.2f")
+                with col2:
+                    hour = st.selectbox(f"Hour",
+                                        options=list(range(8, 16)),
+                                        index=2, key=f"rej_hour_{i}",
+                                        format_func=lambda x: f"{x}:00" if x < 12 else f"{x-12 if x > 12 else 12}:00 PM")
+                    minute = st.selectbox(f"Min",
+                                          options=[0, 30],
+                                          index=0, key=f"rej_min_{i}")
+                
+                rej_time = datetime.combine(prior_date, time(hour, minute))
+                rejections.append({'price': price, 'time': rej_time})
+        
+        if show_manual_wicks:
+            st.markdown("---")
+            st.markdown("### 📍 Session Extremes (Candlestick Wicks)")
+            st.markdown("*Highest wick = bearish candle • Lowest wick = bullish candle*")
+            st.caption("*Exclude if first bearish/bullish candle is 8:30 AM*")
+            
             col1, col2 = st.columns(2)
             with col1:
-                price = st.number_input(f"Rejection {i+1} Price",
-                                        value=6910.0, step=0.5, key=f"rej_price_{i}",
-                                        format="%.2f")
+                hw_price = st.number_input("Highest Wick Price", value=6920.0, step=0.5, format="%.2f")
             with col2:
-                hour = st.selectbox(f"Hour",
-                                    options=list(range(8, 16)),
-                                    index=2, key=f"rej_hour_{i}",
-                                    format_func=lambda x: f"{x}:00" if x < 12 else f"{x-12 if x > 12 else 12}:00 PM")
-                minute = st.selectbox(f"Min",
-                                      options=[0, 30],
-                                      index=0, key=f"rej_min_{i}")
+                hw_hour = st.selectbox("HW Hour", options=list(range(8, 16)), index=2, key="hw_hour",
+                                        format_func=lambda x: f"{x}:00" if x < 12 else f"{x-12 if x > 12 else 12}:00 PM")
+                hw_min = st.selectbox("HW Min", options=[0, 30], index=0, key="hw_min")
             
-            rej_time = datetime.combine(prior_date, time(hour, minute))
-            rejections.append({'price': price, 'time': rej_time})
-        
-        st.markdown("---")
-        st.markdown("### 📍 Session Extremes (Candlestick Wicks)")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            hw_price = st.number_input("Highest Wick Price", value=6920.0, step=0.5, format="%.2f")
-        with col2:
-            hw_hour = st.selectbox("HW Hour", options=list(range(8, 16)), index=2, key="hw_hour",
-                                    format_func=lambda x: f"{x}:00" if x < 12 else f"{x-12 if x > 12 else 12}:00 PM")
-            hw_min = st.selectbox("HW Min", options=[0, 30], index=0, key="hw_min")
-        
-        highest_wick = {
-            'price': hw_price,
-            'time': datetime.combine(prior_date, time(hw_hour, hw_min))
-        }
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            lw_price = st.number_input("Lowest Wick Price", value=6840.0, step=0.5, format="%.2f")
-        with col2:
-            lw_hour = st.selectbox("LW Hour", options=list(range(8, 16)), index=2, key="lw_hour",
-                                    format_func=lambda x: f"{x}:00" if x < 12 else f"{x-12 if x > 12 else 12}:00 PM")
-            lw_min = st.selectbox("LW Min", options=[0, 30], index=0, key="lw_min")
-        
-        lowest_wick = {
-            'price': lw_price,
-            'time': datetime.combine(prior_date, time(lw_hour, lw_min))
-        }
+            highest_wick = {
+                'price': hw_price,
+                'time': datetime.combine(prior_date, time(hw_hour, hw_min))
+            }
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                lw_price = st.number_input("Lowest Wick Price", value=6840.0, step=0.5, format="%.2f")
+            with col2:
+                lw_hour = st.selectbox("LW Hour", options=list(range(8, 16)), index=2, key="lw_hour",
+                                        format_func=lambda x: f"{x}:00" if x < 12 else f"{x-12 if x > 12 else 12}:00 PM")
+                lw_min = st.selectbox("LW Min", options=[0, 30], index=0, key="lw_min")
+            
+            lowest_wick = {
+                'price': lw_price,
+                'time': datetime.combine(prior_date, time(lw_hour, lw_min))
+            }
         
         st.markdown("---")
         st.markdown("### ⚙️ Settings")
