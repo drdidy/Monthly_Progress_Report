@@ -183,6 +183,11 @@ def count_candles_between(start_dt: datetime, end_dt: datetime) -> int:
     Candles are counted at each 30-min mark: :00 and :30 of each hour.
     The candle at start_dt is candle 0, so we count candles from start
     up to (but not including) end_dt's candle.
+    
+    Skips:
+    - Maintenance window: 4:00 PM - 5:00 PM CT daily
+    - Weekend closure: Friday 5:00 PM CT through Sunday 5:00 PM CT
+      (Saturday all day, Sunday before 5:00 PM CT)
     """
     if end_dt <= start_dt:
         return 0
@@ -192,10 +197,23 @@ def count_candles_between(start_dt: datetime, end_dt: datetime) -> int:
     
     while current < end_dt:
         current += timedelta(minutes=CANDLE_MINUTES)
-        # Check if this candle falls within maintenance window
         current_time = current.time()
-        if not (MAINTENANCE_START_CT <= current_time < MAINTENANCE_END_CT):
-            count += 1
+        weekday = current.weekday()  # 0=Monday, 5=Saturday, 6=Sunday
+        
+        # Skip maintenance window (4:00 PM - 5:00 PM CT) every day
+        if MAINTENANCE_START_CT <= current_time < MAINTENANCE_END_CT:
+            continue
+        
+        # Skip all of Saturday (weekday 5)
+        if weekday == 5:
+            continue
+        
+        # Skip Sunday before 5:00 PM CT (weekday 6)
+        # Sunday 5:00 PM CT = globex open for Monday's session
+        if weekday == 6 and current_time < MAINTENANCE_END_CT:
+            continue
+        
+        count += 1
     
     return count
 
@@ -231,9 +249,18 @@ def generate_line_series(anchor_price: float, anchor_time: datetime,
     while current < end_time:
         current += timedelta(minutes=CANDLE_MINUTES)
         current_time_only = current.time()
+        weekday = current.weekday()
         
         # Skip maintenance window
         if MAINTENANCE_START_CT <= current_time_only < MAINTENANCE_END_CT:
+            continue
+        
+        # Skip Saturday entirely
+        if weekday == 5:
+            continue
+        
+        # Skip Sunday before 5:00 PM CT
+        if weekday == 6 and current_time_only < MAINTENANCE_END_CT:
             continue
         
         value = calculate_line_value(anchor_price, anchor_time, current, direction)
