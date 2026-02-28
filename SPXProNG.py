@@ -833,7 +833,7 @@ def detect_inflections(ny_candles: pd.DataFrame) -> dict:
     rejections.sort(key=lambda x: x['time'])
     
     # Highest wick: highest HIGH of a BEARISH candle (close < open)
-    # Exclude candles at 8:30 AM (opening noise)
+    # Only consider candles from 9:00 AM to 2:30 PM CT (exclude open/close noise)
     bearish_mask = closes < opens
     highest_wick = None
     if bearish_mask.any():
@@ -843,8 +843,12 @@ def detect_inflections(ny_candles: pd.DataFrame) -> dict:
             if not bearish_mask[idx]:
                 continue
             t = pd.Timestamp(times[idx]).to_pydatetime()
-            if t.hour == 8 and t.minute <= 30:
-                continue  # Skip 8:00-8:30 AM candles
+            # Skip opening noise (before 9:00 AM)
+            if t.hour < 9:
+                continue
+            # Skip closing noise (2:30 PM and later)
+            if t.hour >= 15 or (t.hour == 14 and t.minute >= 30):
+                continue
             if highs[idx] > best_high:
                 best_high = highs[idx]
                 best_idx = idx
@@ -856,7 +860,7 @@ def detect_inflections(ny_candles: pd.DataFrame) -> dict:
             }
     
     # Lowest wick: lowest LOW of a BULLISH candle (close > open)
-    # Exclude candles at 8:30 AM (opening noise)
+    # Only consider candles from 9:00 AM to 2:30 PM CT (exclude open/close noise)
     bullish_mask = closes > opens
     lowest_wick = None
     if bullish_mask.any():
@@ -866,8 +870,12 @@ def detect_inflections(ny_candles: pd.DataFrame) -> dict:
             if not bullish_mask[idx]:
                 continue
             t = pd.Timestamp(times[idx]).to_pydatetime()
-            if t.hour == 8 and t.minute <= 30:
-                continue  # Skip 8:00-8:30 AM candles
+            # Skip opening noise (before 9:00 AM)
+            if t.hour < 9:
+                continue
+            # Skip closing noise (2:30 PM and later)
+            if t.hour >= 15 or (t.hour == 14 and t.minute >= 30):
+                continue
             if lows[idx] < best_low:
                 best_low = lows[idx]
                 best_idx = idx
