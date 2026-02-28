@@ -1025,49 +1025,50 @@ def fetch_live_price() -> dict:
 def estimate_option_premium(spx_price: float, strike: float, vix: float,
                              hours_to_expiry: float, opt_type: str) -> float:
     """
-    Estimate 0DTE SPX option premium using Black-Scholes approximation.
+    Estimate 0DTE SPX option premium using Black-Scholes with 0DTE adjustment.
     
-    Args:
-        spx_price: Current SPX index price
-        strike: Strike price
-        vix: Current VIX level
-        hours_to_expiry: Hours until 3:00 PM CT close
-        opt_type: 'CALL' or 'PUT'
+    Real 0DTE options trade at a discount to theoretical BS because:
+    - Realized vol is lower than implied for short timeframes
+    - Bid-ask spread compresses theoretical value
+    - Market makers discount extreme gamma risk
     
-    Returns:
-        Estimated premium per share (multiply by 100 for contract cost)
+    We apply a 0.35x discount factor to align with typical 0DTE market prices.
     """
     import math
     
     if hours_to_expiry <= 0:
-        # At expiry, intrinsic only
         if opt_type == 'CALL':
             return max(0, spx_price - strike)
         else:
             return max(0, strike - spx_price)
     
-    # Annualized vol from VIX
-    daily_vol = vix / 100 / (252 ** 0.5)
-    # Scale to remaining hours (6.5 hour trading day)
-    intraday_vol = daily_vol * (hours_to_expiry / 6.5) ** 0.5
+    T = hours_to_expiry / (252 * 6.5)  # fraction of trading year
+    sigma = vix / 100.0  # annualized vol
     
-    # Simplified Black-Scholes
-    d1_denom = intraday_vol if intraday_vol > 0.0001 else 0.0001
-    moneyness = math.log(spx_price / strike) / d1_denom if strike > 0 else 0
+    if T <= 0 or sigma <= 0:
+        return 0.25
     
-    # Normal CDF approximation
     def norm_cdf(x):
-        return 0.5 * (1 + math.erf(x / (2 ** 0.5)))
+        return 0.5 * (1 + math.erf(x / math.sqrt(2)))
     
-    d1 = moneyness / d1_denom + 0.5 * d1_denom if d1_denom > 0.0001 else 0
-    d2 = d1 - d1_denom
+    vol_t = sigma * math.sqrt(T)
+    
+    # Standard Black-Scholes
+    d1 = (math.log(spx_price / strike)) / vol_t + 0.5 * vol_t
+    d2 = d1 - vol_t
     
     if opt_type == 'CALL':
         premium = spx_price * norm_cdf(d1) - strike * norm_cdf(d2)
     else:
         premium = strike * norm_cdf(-d2) - spx_price * norm_cdf(-d1)
     
-    return max(0.10, round(premium * 4) / 4)  # min $0.10, round to 0.25
+    # 0DTE discount: real market trades at ~35% of theoretical BS for OTM options
+    # This narrows as options go ITM (intrinsic value dominates)
+    intrinsic = max(0, (strike - spx_price) if opt_type == 'PUT' else (spx_price - strike))
+    extrinsic = max(0, premium - intrinsic)
+    adjusted = intrinsic + extrinsic * 0.35
+    
+    return max(0.25, round(adjusted * 4) / 4)  # min $0.25, round to nearest 0.25
 
 
 def project_premium_at_scenarios(current_spx: float, strike: float, vix: float,
@@ -2745,58 +2746,75 @@ def main():
             
             st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
             
-            # Trade card
+            # Trade card — split into separate markdown calls for reliable rendering
             trade_color = '#ff5252' if trade_direction == 'PUT' else '#00e676'
             trade_icon = '🔻' if trade_direction == 'PUT' else '🔺'
+            trade_class = 'trade-card-bear' if trade_direction == 'PUT' else 'trade-card-bull'
             
+            st.markdown("### 📋 Trade Card")
+            
+            # Header
             st.markdown(f"""
-            <div style="background: linear-gradient(145deg, #131a2e 0%, #0d1220 100%);
-                        border: 2px solid {trade_color}44; border-radius: 12px;
-                        padding: 20px; margin: 10px 0;">
-                
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 15px;">
-                    <span style="font-family: Orbitron; font-size: 1.4rem; color: {trade_color};">
-                        {trade_icon} BUY {trade_direction} — SPX {strike}
-                    </span>
-                    <span style="font-family: JetBrains Mono; color: #5a6a8a; font-size: 0.8rem;">
-                        {otm_distance:.0f}pt OTM • 0DTE • {premium_source}
-                    </span>
+            <div style="display:flex; justify-content:space-between; align-items:center; 
+                        padding: 16px 20px; margin: 0;
+                        background: linear-gradient(145deg, rgba(14,20,36,0.95), rgba(8,13,22,0.98));
+                        border: 2px solid {trade_color}33; border-bottom: none;
+                        border-radius: 14px 14px 0 0;">
+                <span style="font-family: Orbitron, monospace; font-size: 1.4rem; color: {trade_color}; letter-spacing: 2px;">
+                    {trade_icon} BUY {trade_direction} — SPX {strike}
+                </span>
+                <span style="font-family: JetBrains Mono, monospace; color: #3a4a6a; font-size: 0.8rem;">
+                    {otm_distance:.0f}pt OTM • 0DTE • {premium_source}
+                </span>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Premium / Contracts / Risk row
+            st.markdown(f"""
+            <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap: 0; 
+                        border-left: 2px solid {trade_color}33; border-right: 2px solid {trade_color}33;
+                        background: rgba(10,15,26,0.95);">
+                <div style="text-align:center; padding: 14px; border-right: 1px solid rgba(30,45,74,0.3);">
+                    <div style="font-family: Rajdhani, sans-serif; color: #3a4a6a; font-size: 0.7rem; text-transform:uppercase; letter-spacing: 2px;">Premium</div>
+                    <div style="font-family: JetBrains Mono, monospace; color: #ccd6f6; font-size: 1.4rem; font-weight:700;">${final_premium:.2f}</div>
+                    <div style="font-family: JetBrains Mono, monospace; color: #3a4a6a; font-size: 0.7rem;">${cost_per_contract:.0f} / contract</div>
                 </div>
-                
-                <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap: 12px; text-align:center; margin-bottom: 15px;">
-                    <div style="background: rgba(255,255,255,0.03); border-radius: 8px; padding: 12px;">
-                        <div style="font-family: Rajdhani; color: #5a6a8a; font-size: 0.7rem; text-transform:uppercase;">Premium</div>
-                        <div style="font-family: JetBrains Mono; color: #ccd6f6; font-size: 1.3rem; font-weight:700;">${final_premium:.2f}</div>
-                        <div style="font-family: JetBrains Mono; color: #5a6a8a; font-size: 0.7rem;">${cost_per_contract:.0f} / contract</div>
-                    </div>
-                    <div style="background: rgba(255,255,255,0.03); border-radius: 8px; padding: 12px;">
-                        <div style="font-family: Rajdhani; color: #5a6a8a; font-size: 0.7rem; text-transform:uppercase;">Contracts</div>
-                        <div style="font-family: JetBrains Mono; color: #ccd6f6; font-size: 1.3rem; font-weight:700;">{num_contracts}</div>
-                        <div style="font-family: JetBrains Mono; color: #5a6a8a; font-size: 0.7rem;">× ${cost_per_contract:.0f} ea</div>
-                    </div>
-                    <div style="background: rgba(255,255,255,0.03); border-radius: 8px; padding: 12px;">
-                        <div style="font-family: Rajdhani; color: #5a6a8a; font-size: 0.7rem; text-transform:uppercase;">Total Risk</div>
-                        <div style="font-family: JetBrains Mono; color: #ff1744; font-size: 1.3rem; font-weight:700;">${total_cost:,.0f}</div>
-                        <div style="font-family: JetBrains Mono; color: #5a6a8a; font-size: 0.7rem;">Max loss = premium</div>
-                    </div>
+                <div style="text-align:center; padding: 14px; border-right: 1px solid rgba(30,45,74,0.3);">
+                    <div style="font-family: Rajdhani, sans-serif; color: #3a4a6a; font-size: 0.7rem; text-transform:uppercase; letter-spacing: 2px;">Contracts</div>
+                    <div style="font-family: JetBrains Mono, monospace; color: #ccd6f6; font-size: 1.4rem; font-weight:700;">{num_contracts}</div>
+                    <div style="font-family: JetBrains Mono, monospace; color: #3a4a6a; font-size: 0.7rem;">× ${cost_per_contract:.0f} ea</div>
                 </div>
-                
-                <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap: 12px; text-align:center;">
-                    <div style="background: rgba(255,23,68,0.08); border-radius: 8px; padding: 12px;">
-                        <div style="font-family: Rajdhani; color: #ff1744; font-size: 0.7rem; text-transform:uppercase;">Stop Loss (SPX)</div>
-                        <div style="font-family: JetBrains Mono; color: #ff1744; font-size: 1.3rem; font-weight:700;">{stop_price:.2f}</div>
-                        <div style="font-family: JetBrains Mono; color: #5a6a8a; font-size: 0.7rem;">{stop_line['short'] if stop_line else 'Fixed'} • {abs(current_price - stop_price):.1f}pt</div>
-                    </div>
-                    <div style="background: rgba(0,230,118,0.08); border-radius: 8px; padding: 12px;">
-                        <div style="font-family: Rajdhani; color: #00e676; font-size: 0.7rem; text-transform:uppercase;">Target 1 (SPX)</div>
-                        <div style="font-family: JetBrains Mono; color: #00e676; font-size: 1.3rem; font-weight:700;">{tp1:.2f}</div>
-                        <div style="font-family: JetBrains Mono; color: #5a6a8a; font-size: 0.7rem;">{tp1_name} • {abs(current_price - tp1):.1f}pt</div>
-                    </div>
-                    <div style="background: rgba(0,230,118,0.08); border-radius: 8px; padding: 12px;">
-                        <div style="font-family: Rajdhani; color: #00e676; font-size: 0.7rem; text-transform:uppercase;">Target 2 (SPX)</div>
-                        <div style="font-family: JetBrains Mono; color: #00e676; font-size: 1.3rem; font-weight:700;">{tp2:.2f}</div>
-                        <div style="font-family: JetBrains Mono; color: #5a6a8a; font-size: 0.7rem;">{tp2_name} • {abs(current_price - tp2):.1f}pt</div>
-                    </div>
+                <div style="text-align:center; padding: 14px;">
+                    <div style="font-family: Rajdhani, sans-serif; color: #3a4a6a; font-size: 0.7rem; text-transform:uppercase; letter-spacing: 2px;">Total Risk</div>
+                    <div style="font-family: JetBrains Mono, monospace; color: #ff1744; font-size: 1.4rem; font-weight:700;">${total_cost:,.0f}</div>
+                    <div style="font-family: JetBrains Mono, monospace; color: #3a4a6a; font-size: 0.7rem;">Max loss = premium</div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Stop / TP1 / TP2 row
+            st.markdown(f"""
+            <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap: 0;
+                        border: 2px solid {trade_color}33; border-top: 1px solid rgba(30,45,74,0.3);
+                        border-radius: 0 0 14px 14px;
+                        background: rgba(10,15,26,0.95);">
+                <div style="text-align:center; padding: 14px; border-right: 1px solid rgba(30,45,74,0.3);
+                            background: rgba(255,23,68,0.04);">
+                    <div style="font-family: Rajdhani, sans-serif; color: #ff1744; font-size: 0.7rem; text-transform:uppercase; letter-spacing: 2px;">Stop Loss (SPX)</div>
+                    <div style="font-family: JetBrains Mono, monospace; color: #ff1744; font-size: 1.3rem; font-weight:700;">{stop_price:.2f}</div>
+                    <div style="font-family: JetBrains Mono, monospace; color: #3a4a6a; font-size: 0.7rem;">{stop_line['short'] if stop_line else 'Fixed'} • {abs(current_price - stop_price):.1f}pt</div>
+                </div>
+                <div style="text-align:center; padding: 14px; border-right: 1px solid rgba(30,45,74,0.3);
+                            background: rgba(0,230,118,0.04);">
+                    <div style="font-family: Rajdhani, sans-serif; color: #00e676; font-size: 0.7rem; text-transform:uppercase; letter-spacing: 2px;">Target 1 (SPX)</div>
+                    <div style="font-family: JetBrains Mono, monospace; color: #00e676; font-size: 1.3rem; font-weight:700;">{tp1:.2f}</div>
+                    <div style="font-family: JetBrains Mono, monospace; color: #3a4a6a; font-size: 0.7rem;">{tp1_name} • {abs(current_price - tp1):.1f}pt</div>
+                </div>
+                <div style="text-align:center; padding: 14px;
+                            background: rgba(0,230,118,0.04);">
+                    <div style="font-family: Rajdhani, sans-serif; color: #00e676; font-size: 0.7rem; text-transform:uppercase; letter-spacing: 2px;">Target 2 (SPX)</div>
+                    <div style="font-family: JetBrains Mono, monospace; color: #00e676; font-size: 1.3rem; font-weight:700;">{tp2:.2f}</div>
+                    <div style="font-family: JetBrains Mono, monospace; color: #3a4a6a; font-size: 0.7rem;">{tp2_name} • {abs(current_price - tp2):.1f}pt</div>
                 </div>
             </div>
             """, unsafe_allow_html=True)
