@@ -1471,7 +1471,7 @@ def detect_inflections(ny_candles: pd.DataFrame) -> dict:
 def main():
     # Header
     st.markdown('<div class="main-header">SPX Prophet Next Gen</div>', unsafe_allow_html=True)
-    st.markdown('<div class="sub-header">Structural Rate Engine • Futures & Options</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sub-header">Structural Flow Engine • Futures & Options</div>', unsafe_allow_html=True)
     
     # Live price tracking toggle
     live_mode = st.toggle("🔴 LIVE MODE", value=False, help="Auto-refresh every 30 seconds with current ES price")
@@ -3223,67 +3223,356 @@ def main():
             st.markdown(f"<span style='font-family: JetBrains Mono; font-size: 0.85rem; color: #8892b0;'>{factor}</span>", unsafe_allow_html=True)
     
     # ============================================================
-    # TAB 4: TRADE LOG
+    # TAB 4: TRADE LOG — Persistent JSON Storage
     # ============================================================
     with tab4:
         st.markdown("### 📋 Trade Log")
-        st.markdown("*Track your trades to measure the system's performance*")
+        st.markdown("*Persistent trade tracking • Performance analytics*")
         
         st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
         
-        # Initialize session state for trades
-        if 'trades' not in st.session_state:
-            st.session_state.trades = []
+        # ── Trade log file path ──
+        import os
+        TRADE_LOG_FILE = os.path.expanduser("~/.spx_prophet_trades.json")
         
-        with st.expander("➕ Log New Trade", expanded=True):
-            tcol1, tcol2, tcol3 = st.columns(3)
+        def load_trades() -> list:
+            """Load trades from persistent JSON file."""
+            try:
+                if os.path.exists(TRADE_LOG_FILE):
+                    with open(TRADE_LOG_FILE, 'r') as f:
+                        return json.load(f)
+            except (json.JSONDecodeError, IOError):
+                pass
+            return []
+        
+        def save_trades(trades: list):
+            """Save trades to persistent JSON file."""
+            try:
+                with open(TRADE_LOG_FILE, 'w') as f:
+                    json.dump(trades, f, indent=2)
+            except IOError as e:
+                st.error(f"Could not save trades: {e}")
+        
+        def calculate_pnl(session, direction, entry, exit_price, contracts, premium_per_contract=0):
+            """Calculate P&L based on session type."""
+            if "Futures" in session:
+                # ES futures: $50 per point per contract (MES: $5)
+                pnl_per_point = 5  # MES default — user can override
+                mult = 1 if direction == "LONG" else -1
+                pnl = mult * (exit_price - entry) * contracts * pnl_per_point
+            else:
+                # SPX options: premium-based
+                # Entry cost = premium × 100 × contracts
+                # Exit value = exit_premium × 100 × contracts  
+                # For simplicity: user enters entry/exit as premium per share
+                mult = 1  # options are always long (buy to open)
+                pnl = (exit_price - entry) * 100 * contracts
+            return round(pnl, 2)
+        
+        # Load persistent trades
+        all_trades = load_trades()
+        
+        # ── Log New Trade ──
+        with st.expander("➕ Log New Trade", expanded=len(all_trades) == 0):
+            tcol1, tcol2 = st.columns(2)
             
             with tcol1:
                 trade_date = st.date_input("Trade Date", value=datetime.now().date(), key="trade_date")
-                trade_session = st.selectbox("Session", ["Asian (Futures)", "NY (Options)"])
-                trade_direction = st.selectbox("Direction", ["LONG", "SHORT"])
+                trade_session = st.selectbox("Session", ["NY (Options)", "Asian (Futures)"], key="trade_sess")
+                trade_direction_input = st.selectbox("Direction", 
+                    ["PUT", "CALL"] if "Options" in trade_session else ["LONG", "SHORT"],
+                    key="trade_dir")
+                trade_confluence_input = st.slider("Confluence Score", 0.0, 5.0, 3.0, 0.5, key="trade_conf")
             
             with tcol2:
-                trade_entry = st.number_input("Entry Price", value=6865.0, step=0.25, key="trade_entry")
-                trade_exit = st.number_input("Exit Price", value=6870.0, step=0.25, key="trade_exit")
-                trade_contracts = st.number_input("Contracts", value=2, min_value=1, key="trade_contracts")
+                if "Options" in trade_session:
+                    trade_strike = st.number_input("Strike", value=6845, step=5, key="trade_strike")
+                    trade_entry_premium = st.number_input("Entry Premium (per share)", value=6.50, step=0.25, format="%.2f", key="trade_entry_prem")
+                    trade_exit_premium = st.number_input("Exit Premium (per share)", value=9.00, step=0.25, format="%.2f", key="trade_exit_prem")
+                    trade_contracts_input = st.number_input("Contracts", value=3, min_value=1, key="trade_contracts")
+                else:
+                    trade_entry_price = st.number_input("Entry Price", value=6865.0, step=0.25, key="trade_entry_es")
+                    trade_exit_price = st.number_input("Exit Price", value=6870.0, step=0.25, key="trade_exit_es")
+                    trade_contracts_input = st.number_input("Contracts (MES)", value=2, min_value=1, key="trade_contracts_es")
+                    trade_strike = 0
+                    trade_entry_premium = trade_entry_price
+                    trade_exit_premium = trade_exit_price
             
-            with tcol3:
-                trade_confluence = st.slider("Confluence Score", 0.0, 5.0, 3.0, 0.5, key="trade_conf")
-                trade_notes = st.text_input("Notes", key="trade_notes")
-                trade_account = st.selectbox("Account", ["Account 1", "Account 2", "Account 3", "Tastytrade"],
-                                             key="trade_acct")
+            trade_result = st.selectbox("Result", ["Win", "Loss", "Breakeven", "Stopped Out", "Time Stop"], key="trade_result")
+            trade_notes_input = st.text_input("Notes", key="trade_notes", placeholder="What worked? What didn't?")
             
-            if st.button("💾 Save Trade"):
-                pnl_per_point = 50 if "Futures" in trade_session else 100
-                direction_mult = 1 if trade_direction == "LONG" else -1
-                pnl = direction_mult * (trade_exit - trade_entry) * trade_contracts * pnl_per_point
-                
-                trade = {
-                    'Date': str(trade_date),
-                    'Session': trade_session,
-                    'Direction': trade_direction,
-                    'Entry': trade_entry,
-                    'Exit': trade_exit,
-                    'Contracts': trade_contracts,
-                    'P&L': f"${pnl:,.0f}",
-                    'Confluence': trade_confluence,
-                    'Account': trade_account,
-                    'Notes': trade_notes
-                }
-                st.session_state.trades.append(trade)
-                st.success(f"Trade logged! P&L: ${pnl:,.0f}")
+            # Preview P&L
+            if "Options" in trade_session:
+                preview_pnl = (trade_exit_premium - trade_entry_premium) * 100 * trade_contracts_input
+                preview_cost = trade_entry_premium * 100 * trade_contracts_input
+                st.markdown(f"""
+                <div style="font-family: JetBrains Mono, monospace; font-size: 0.85rem; color: #8892b0; padding: 8px 0;">
+                    Entry: {trade_contracts_input}× ${trade_entry_premium:.2f} = <span style="color:#ccd6f6;">${preview_cost:,.0f}</span> &nbsp;→&nbsp;
+                    P&L: <span style="color: {'#00e676' if preview_pnl >= 0 else '#ff1744'}; font-weight:700;">${preview_pnl:+,.0f}</span>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                mult = 1 if trade_direction_input == "LONG" else -1
+                preview_pnl = mult * (trade_exit_price - trade_entry_price) * trade_contracts_input * 5
+                st.markdown(f"""
+                <div style="font-family: JetBrains Mono, monospace; font-size: 0.85rem; color: #8892b0; padding: 8px 0;">
+                    {trade_direction_input} {trade_contracts_input} MES @ {trade_entry_price:.2f} → {trade_exit_price:.2f} &nbsp;→&nbsp;
+                    P&L: <span style="color: {'#00e676' if preview_pnl >= 0 else '#ff1744'}; font-weight:700;">${preview_pnl:+,.0f}</span>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            save_col1, save_col2 = st.columns([1, 3])
+            with save_col1:
+                if st.button("💾 Save Trade", use_container_width=True):
+                    if "Options" in trade_session:
+                        pnl = (trade_exit_premium - trade_entry_premium) * 100 * trade_contracts_input
+                    else:
+                        mult = 1 if trade_direction_input == "LONG" else -1
+                        pnl = mult * (trade_exit_price - trade_entry_price) * trade_contracts_input * 5
+                    
+                    new_trade = {
+                        'id': f"{trade_date}_{len(all_trades)+1}",
+                        'date': str(trade_date),
+                        'session': trade_session,
+                        'direction': trade_direction_input,
+                        'strike': trade_strike if "Options" in trade_session else 0,
+                        'entry': trade_entry_premium if "Options" in trade_session else trade_entry_price,
+                        'exit': trade_exit_premium if "Options" in trade_session else trade_exit_price,
+                        'contracts': trade_contracts_input,
+                        'pnl': round(pnl, 2),
+                        'confluence': trade_confluence_input,
+                        'result': trade_result,
+                        'notes': trade_notes_input,
+                    }
+                    all_trades.append(new_trade)
+                    save_trades(all_trades)
+                    st.success(f"Trade saved! P&L: ${pnl:+,.0f}")
+                    st.rerun()
         
-        if st.session_state.trades:
-            st.markdown("### 📊 Trade History")
-            df = pd.DataFrame(st.session_state.trades)
-            st.dataframe(df, use_container_width=True, hide_index=True)
+        # ── Performance Dashboard ──
+        if all_trades:
+            st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+            st.markdown("### 📊 Performance Dashboard")
             
-            # Summary stats
-            total_trades = len(st.session_state.trades)
-            st.markdown(f"**Total Trades Logged: {total_trades}**")
+            df_trades = pd.DataFrame(all_trades)
+            df_trades['pnl'] = pd.to_numeric(df_trades['pnl'], errors='coerce').fillna(0)
+            df_trades['date'] = pd.to_datetime(df_trades['date'])
+            
+            total_pnl = df_trades['pnl'].sum()
+            total_trades = len(df_trades)
+            wins = len(df_trades[df_trades['pnl'] > 0])
+            losses = len(df_trades[df_trades['pnl'] < 0])
+            breakevens = total_trades - wins - losses
+            win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
+            avg_win = df_trades[df_trades['pnl'] > 0]['pnl'].mean() if wins > 0 else 0
+            avg_loss = df_trades[df_trades['pnl'] < 0]['pnl'].mean() if losses > 0 else 0
+            profit_factor = abs(avg_win / avg_loss) if avg_loss != 0 else float('inf')
+            best_trade = df_trades['pnl'].max()
+            worst_trade = df_trades['pnl'].min()
+            
+            # Equity curve
+            df_trades_sorted = df_trades.sort_values('date')
+            df_trades_sorted['cumulative_pnl'] = df_trades_sorted['pnl'].cumsum()
+            
+            # Running max for drawdown
+            df_trades_sorted['peak'] = df_trades_sorted['cumulative_pnl'].cummax()
+            df_trades_sorted['drawdown'] = df_trades_sorted['cumulative_pnl'] - df_trades_sorted['peak']
+            max_drawdown = df_trades_sorted['drawdown'].min()
+            
+            # ── Summary Cards ──
+            pnl_color = "bull" if total_pnl >= 0 else "bear"
+            wr_color = "bull" if win_rate >= 50 else ("neutral" if win_rate >= 40 else "bear")
+            
+            c1, c2, c3, c4 = st.columns(4)
+            with c1:
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div class="metric-label">Total P&L</div>
+                    <div class="metric-value-{pnl_color}">${total_pnl:+,.0f}</div>
+                    <div style="font-family: JetBrains Mono, monospace; color: #3a4a6a; font-size: 0.75rem;">{total_trades} trades</div>
+                </div>""", unsafe_allow_html=True)
+            with c2:
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div class="metric-label">Win Rate</div>
+                    <div class="metric-value-{wr_color}">{win_rate:.0f}%</div>
+                    <div style="font-family: JetBrains Mono, monospace; color: #3a4a6a; font-size: 0.75rem;">{wins}W / {losses}L / {breakevens}BE</div>
+                </div>""", unsafe_allow_html=True)
+            with c3:
+                pf_color = "bull" if profit_factor >= 1.5 else ("neutral" if profit_factor >= 1.0 else "bear")
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div class="metric-label">Profit Factor</div>
+                    <div class="metric-value-{pf_color}">{profit_factor:.2f}</div>
+                    <div style="font-family: JetBrains Mono, monospace; color: #3a4a6a; font-size: 0.75rem;">Avg W: ${avg_win:+,.0f} / L: ${avg_loss:+,.0f}</div>
+                </div>""", unsafe_allow_html=True)
+            with c4:
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div class="metric-label">Max Drawdown</div>
+                    <div class="metric-value-bear">${max_drawdown:,.0f}</div>
+                    <div style="font-family: JetBrains Mono, monospace; color: #3a4a6a; font-size: 0.75rem;">Best: ${best_trade:+,.0f} / Worst: ${worst_trade:+,.0f}</div>
+                </div>""", unsafe_allow_html=True)
+            
+            # ── Equity Curve Chart ──
+            if len(df_trades_sorted) >= 2:
+                st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+                st.markdown("### 📈 Equity Curve")
+                
+                eq_fig = go.Figure()
+                
+                # Equity line with fill
+                eq_fig.add_trace(go.Scatter(
+                    x=df_trades_sorted['date'], 
+                    y=df_trades_sorted['cumulative_pnl'],
+                    mode='lines+markers',
+                    name='Equity',
+                    line=dict(color='#00d4ff', width=2.5),
+                    marker=dict(size=6, color=df_trades_sorted['pnl'].apply(lambda x: '#00e676' if x >= 0 else '#ff1744')),
+                    fill='tozeroy',
+                    fillcolor='rgba(0,212,255,0.06)',
+                    hovertemplate='<b>%{x|%b %d}</b><br>Equity: $%{y:+,.0f}<extra></extra>'
+                ))
+                
+                # Zero line
+                eq_fig.add_hline(y=0, line_dash="dot", line_color="rgba(255,255,255,0.1)", line_width=1)
+                
+                # Drawdown shading
+                if max_drawdown < 0:
+                    eq_fig.add_trace(go.Scatter(
+                        x=df_trades_sorted['date'],
+                        y=df_trades_sorted['drawdown'],
+                        mode='lines',
+                        name='Drawdown',
+                        line=dict(color='#ff1744', width=1, dash='dot'),
+                        fill='tozeroy',
+                        fillcolor='rgba(255,23,68,0.06)',
+                        hovertemplate='Drawdown: $%{y:,.0f}<extra></extra>'
+                    ))
+                
+                eq_fig.update_layout(
+                    template='plotly_dark',
+                    paper_bgcolor='rgba(5,8,16,1)',
+                    plot_bgcolor='rgba(8,13,22,1)',
+                    height=350,
+                    margin=dict(l=10, r=20, t=10, b=40),
+                    xaxis=dict(
+                        gridcolor='rgba(30,45,74,0.12)', showgrid=True,
+                        tickfont=dict(family='Rajdhani', size=11, color='#3a4a6a'),
+                    ),
+                    yaxis=dict(
+                        gridcolor='rgba(30,45,74,0.12)', showgrid=True,
+                        tickformat='$,.0f', side='right',
+                        tickfont=dict(family='JetBrains Mono', size=11, color='#5a6a8a'),
+                    ),
+                    legend=dict(bgcolor='rgba(6,9,16,0.95)', font=dict(size=10, family='JetBrains Mono', color='#8892b0')),
+                    font=dict(family='JetBrains Mono', color='#8892b0'),
+                    hovermode='x unified',
+                    hoverlabel=dict(bgcolor='rgba(6,9,16,0.95)', bordercolor='rgba(0,212,255,0.2)',
+                        font=dict(family='JetBrains Mono', size=11, color='#ccd6f6')),
+                )
+                st.plotly_chart(eq_fig, use_container_width=True)
+            
+            # ── Win Rate by Confluence ──
+            if len(df_trades) >= 3:
+                st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+                st.markdown("### 🎯 Win Rate by Confluence Score")
+                
+                conf_groups = df_trades.groupby(df_trades['confluence'].apply(lambda x: f"{x:.0f}+")).agg(
+                    trades=('pnl', 'count'),
+                    wins=('pnl', lambda x: (x > 0).sum()),
+                    total_pnl=('pnl', 'sum'),
+                ).reset_index()
+                conf_groups['win_rate'] = (conf_groups['wins'] / conf_groups['trades'] * 100).round(0)
+                
+                for _, row in conf_groups.iterrows():
+                    wr = row['win_rate']
+                    wr_bar_color = '#00e676' if wr >= 60 else ('#ffd740' if wr >= 45 else '#ff5252')
+                    pnl_val = row['total_pnl']
+                    pnl_color_str = '#00e676' if pnl_val >= 0 else '#ff1744'
+                    bar_width = max(5, wr)
+                    st.markdown(f"""
+                    <div style="display:flex; align-items:center; gap: 12px; padding: 8px 14px; margin: 3px 0;
+                                background: rgba(255,255,255,0.02); border-radius: 8px;">
+                        <span style="font-family: Orbitron, monospace; color: #ccd6f6; font-size: 0.85rem; min-width: 50px;">
+                            {row['confluence']}
+                        </span>
+                        <div style="flex:1; height: 20px; background: rgba(255,255,255,0.03); border-radius: 4px; overflow:hidden;">
+                            <div style="height:100%; width:{bar_width}%; background: {wr_bar_color}; border-radius: 4px; 
+                                        transition: width 0.5s ease;"></div>
+                        </div>
+                        <span style="font-family: JetBrains Mono, monospace; color: {wr_bar_color}; font-size: 0.85rem; min-width: 45px; text-align:right;">
+                            {wr:.0f}%
+                        </span>
+                        <span style="font-family: JetBrains Mono, monospace; color: {pnl_color_str}; font-size: 0.8rem; min-width: 70px; text-align:right;">
+                            ${pnl_val:+,.0f}
+                        </span>
+                        <span style="font-family: Rajdhani, sans-serif; color: #3a4a6a; font-size: 0.75rem; min-width: 50px;">
+                            {int(row['trades'])} trades
+                        </span>
+                    </div>
+                    """, unsafe_allow_html=True)
+            
+            # ── Trade History Table ──
+            st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+            st.markdown("### 📋 Trade History")
+            
+            # Format for display
+            display_df = df_trades_sorted[['date', 'session', 'direction', 'strike', 'entry', 'exit', 
+                                            'contracts', 'pnl', 'confluence', 'result', 'notes']].copy()
+            display_df['date'] = display_df['date'].dt.strftime('%b %d')
+            display_df.columns = ['Date', 'Session', 'Dir', 'Strike', 'Entry', 'Exit', 'Qty', 'P&L', 'Conf', 'Result', 'Notes']
+            
+            # Style the dataframe
+            def style_pnl(val):
+                if isinstance(val, (int, float)):
+                    color = '#00e676' if val >= 0 else '#ff1744'
+                    return f'color: {color}; font-weight: bold'
+                return ''
+            
+            st.dataframe(
+                display_df.style.applymap(style_pnl, subset=['P&L']),
+                use_container_width=True, hide_index=True, height=400
+            )
+            
+            # ── Delete Trade ──
+            st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+            with st.expander("🗑️ Delete a Trade"):
+                if all_trades:
+                    trade_options = [f"{t['date']} | {t['direction']} | ${t['pnl']:+,.0f} | {t.get('notes','')[:30]}" for t in all_trades]
+                    delete_idx = st.selectbox("Select trade to delete", range(len(trade_options)), format_func=lambda i: trade_options[i])
+                    
+                    dc1, dc2 = st.columns([1, 3])
+                    with dc1:
+                        if st.button("🗑️ Delete", type="secondary", use_container_width=True):
+                            all_trades.pop(delete_idx)
+                            save_trades(all_trades)
+                            st.success("Trade deleted.")
+                            st.rerun()
+            
+            # ── Export ──
+            with st.expander("📤 Export Trades"):
+                export_col1, export_col2 = st.columns(2)
+                with export_col1:
+                    csv_data = display_df.to_csv(index=False)
+                    st.download_button("📥 Download CSV", csv_data, "spx_prophet_trades.csv", "text/csv",
+                                        use_container_width=True)
+                with export_col2:
+                    json_data = json.dumps(all_trades, indent=2)
+                    st.download_button("📥 Download JSON", json_data, "spx_prophet_trades.json", "application/json",
+                                        use_container_width=True)
+        
         else:
-            st.info("No trades logged yet. Start tracking your trades above.")
+            st.markdown("""
+            <div class="signal-box-neutral" style="text-align:center; animation: none;">
+                <div style="font-family: Orbitron, monospace; color: #ffd740; font-size: 1.1rem; letter-spacing: 2px;">
+                    NO TRADES LOGGED YET
+                </div>
+                <div style="font-family: Rajdhani, sans-serif; color: #8892b0; font-size: 1rem; margin-top: 10px;">
+                    Start tracking your trades to build your performance history.
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
 
 
 if __name__ == "__main__":
