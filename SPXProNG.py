@@ -1561,11 +1561,11 @@ def main():
                 st.dataframe(pd.DataFrame(desc_data), use_container_width=True, hide_index=True)
     
     # ============================================================
-    # TAB 2: ASIAN SESSION FUTURES
+    # TAB 2: ASIAN SESSION FUTURES — 6 PM DECISION FRAMEWORK
     # ============================================================
     with tab2:
-        st.markdown("### 🌙 Asian Session — Projected Line Levels")
-        st.markdown("*Where are the lines during the overnight session?*")
+        st.markdown("### 🌙 Asian Session — ES Futures (Prop Firm)")
+        st.markdown("*6:00 PM Decision • 6-7 PM Trading Window • Flat by 7 PM*")
         
         st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
         
@@ -1577,62 +1577,320 @@ def main():
         else:
             overnight_date_tab2 = prior_date
         
-        # Line Values at Key Overnight Times
-        key_times_ct = [
-            ("5:00 PM — Globex Open", time(17, 0), overnight_date_tab2),
-            ("6:00 PM — Sydney", time(18, 0), overnight_date_tab2),
-            ("7:00 PM — Pre-Tokyo", time(19, 0), overnight_date_tab2),
-            ("8:00 PM — Tokyo Active", time(20, 0), overnight_date_tab2),
-            ("9:00 PM", time(21, 0), overnight_date_tab2),
-            ("10:00 PM", time(22, 0), overnight_date_tab2),
-            ("11:00 PM", time(23, 0), overnight_date_tab2),
-            ("12:00 AM — Midnight", time(0, 0), next_date),
-            ("1:00 AM", time(1, 0), next_date),
-            ("2:00 AM — London Open", time(2, 0), next_date),
-            ("4:00 AM", time(4, 0), next_date),
-            ("6:00 AM", time(6, 0), next_date),
-            ("7:30 AM — Data Drop", time(7, 30), next_date),
-            ("8:30 AM — Market Open", time(8, 30), next_date),
-            ("9:00 AM — Decision", time(9, 0), next_date),
-        ]
+        # ============================================================
+        # CALCULATE ALL LINE VALUES AT 6 PM CT
+        # ============================================================
+        decision_time_6pm = datetime.combine(overnight_date_tab2, time(18, 0))
+        exit_time_7pm = datetime.combine(overnight_date_tab2, time(19, 0))
         
-        time_table = []
-        for label, t, d in key_times_ct:
-            dt = datetime.combine(d, t)
-            row = {'Time (CT)': label}
-            
-            hw = levels['key_levels']['highest_wick_ascending']
-            if hw:
-                row['HW Asc ↗'] = f"{calculate_line_value(hw['anchor_price'], hw['anchor_time'], dt, 'ascending'):.2f}"
-            
-            hb = levels['key_levels']['highest_bounce_ascending']
-            if hb:
-                row['HB Asc ↗'] = f"{calculate_line_value(hb['anchor_price'], hb['anchor_time'], dt, 'ascending'):.2f}"
-            
-            lr = levels['key_levels']['lowest_rejection_descending']
-            if lr:
-                row['LR Desc ↘'] = f"{calculate_line_value(lr['anchor_price'], lr['anchor_time'], dt, 'descending'):.2f}"
-            
-            lw = levels['key_levels']['lowest_wick_descending']
-            if lw:
-                row['LW Desc ↘'] = f"{calculate_line_value(lw['anchor_price'], lw['anchor_time'], dt, 'descending'):.2f}"
-            
-            time_table.append(row)
+        # Build the full line ladder at 6 PM
+        line_ladder_6pm = []
         
-        st.dataframe(pd.DataFrame(time_table), use_container_width=True, hide_index=True, height=560)
+        # All ascending lines (bounces + highest wick)
+        for line in levels['ascending']:
+            val_6pm = calculate_line_value(line['anchor_price'], line['anchor_time'], decision_time_6pm, 'ascending')
+            val_7pm = calculate_line_value(line['anchor_price'], line['anchor_time'], exit_time_7pm, 'ascending')
+            line_ladder_6pm.append({
+                'name': line['source'].split(' @ ')[0] if ' @ ' in line['source'] else line['source'],
+                'short': f"{'HW' if line['type'] == 'highest_wick' else 'B'} ↗",
+                'value_6pm': val_6pm,
+                'value_7pm': val_7pm,
+                'direction': 'ascending',
+                'anchor': line['anchor_price'],
+                'color': '#ff1744' if line['type'] == 'highest_wick' else '#ff5252',
+                'is_key': line['type'] == 'highest_wick',
+            })
         
-        st.markdown("""
-        <div class="metric-card" style="margin-top:10px;">
-            <div style="font-family: 'JetBrains Mono'; color: #8892b0; font-size: 0.85rem;">
-                <strong style="color: #ff5252;">HW Asc ↗</strong> = Highest Wick Ascending • 
-                <strong style="color: #ff5252;">HB Asc ↗</strong> = Highest Bounce Ascending<br>
-                <strong style="color: #69f0ae;">LR Desc ↘</strong> = Lowest Rejection Descending • 
-                <strong style="color: #69f0ae;">LW Desc ↘</strong> = Lowest Wick Descending<br><br>
-                <strong style="color: #ffd740;">Trade Setup:</strong> When price touches a projected line during Tokyo Active (8PM-12AM CT), 
-                enter with 3pt stop, 5pt target. Max 2 trades per session.
+        # All descending lines (rejections + lowest wick)
+        for line in levels['descending']:
+            val_6pm = calculate_line_value(line['anchor_price'], line['anchor_time'], decision_time_6pm, 'descending')
+            val_7pm = calculate_line_value(line['anchor_price'], line['anchor_time'], exit_time_7pm, 'descending')
+            line_ladder_6pm.append({
+                'name': line['source'].split(' @ ')[0] if ' @ ' in line['source'] else line['source'],
+                'short': f"{'LW' if line['type'] == 'lowest_wick' else 'R'} ↘",
+                'value_6pm': val_6pm,
+                'value_7pm': val_7pm,
+                'direction': 'descending',
+                'anchor': line['anchor_price'],
+                'color': '#00e676' if line['type'] == 'lowest_wick' else '#69f0ae',
+                'is_key': line['type'] == 'lowest_wick',
+            })
+        
+        # Sort by 6 PM value, highest to lowest
+        line_ladder_6pm.sort(key=lambda x: x['value_6pm'], reverse=True)
+        
+        # ============================================================
+        # 6 PM LINE LADDER DISPLAY
+        # ============================================================
+        st.markdown("### 📊 Line Ladder @ 6:00 PM CT")
+        st.caption("All projected lines sorted by their value at the decision point")
+        
+        if line_ladder_6pm:
+            ladder_html = '<div style="font-family: JetBrains Mono; font-size: 0.85rem;">'
+            for i, line in enumerate(line_ladder_6pm):
+                bg = 'rgba(255,23,68,0.08)' if line['direction'] == 'ascending' else 'rgba(0,230,118,0.08)'
+                border = line['color']
+                ladder_html += f"""
+                <div style="display:flex; justify-content:space-between; align-items:center;
+                            padding: 8px 12px; margin: 2px 0; border-left: 3px solid {border};
+                            background: {bg}; border-radius: 0 6px 6px 0;">
+                    <span style="color: {line['color']}; min-width: 120px;">{line['short']} {line['name'][:20]}</span>
+                    <span style="color: #ccd6f6; font-weight: 700;">{line['value_6pm']:.2f}</span>
+                    <span style="color: #5a6a8a; font-size: 0.75rem;">→ 7PM: {line['value_7pm']:.2f}</span>
+                </div>"""
+            ladder_html += '</div>'
+            st.markdown(ladder_html, unsafe_allow_html=True)
+        
+        st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+        
+        # ============================================================
+        # 6 PM PRICE INPUT & TRADE SETUP
+        # ============================================================
+        st.markdown("### 🎯 6:00 PM Decision Framework")
+        
+        # Auto-fill from live price if available
+        asian_default = 6870.0
+        if live_mode and live_price_data and live_price_data.get('ok'):
+            # Only auto-update if NOT locked
+            if not st.session_state.get('asian_6pm_locked', False):
+                asian_default = live_price_data['price']  # ES price, no SPX offset for futures
+                st.session_state['_asian_live_price'] = asian_default
+            else:
+                asian_default = st.session_state.get('_asian_locked_price', asian_default)
+        
+        col_price, col_lock = st.columns([3, 1])
+        
+        with col_price:
+            asian_price = st.number_input("ES Price at 6:00 PM CT", 
+                                           value=asian_default, step=0.25, format="%.2f",
+                                           key="asian_es_price",
+                                           help="Auto-fills from live ES price. Lock to freeze for trade planning.")
+        
+        with col_lock:
+            st.markdown("<br>", unsafe_allow_html=True)  # spacing
+            is_locked = st.session_state.get('asian_6pm_locked', False)
+            
+            if is_locked:
+                locked_price = st.session_state.get('_asian_locked_price', 0)
+                st.markdown(f"""
+                <div style="font-family: JetBrains Mono; color: #ffd740; font-size: 0.8rem; text-align:center;">
+                    🔒 Locked @ {locked_price:.2f}
+                </div>""", unsafe_allow_html=True)
+                if st.button("🔓 Unlock", key="unlock_asian", use_container_width=True):
+                    st.session_state['asian_6pm_locked'] = False
+                    st.rerun()
+            else:
+                if st.button("🔒 Lock 6PM Price", key="lock_asian", use_container_width=True):
+                    st.session_state['asian_6pm_locked'] = True
+                    st.session_state['_asian_locked_price'] = asian_price
+                    st.rerun()
+        
+        max_move = st.number_input("Max expected move (pts)", value=5.0, step=0.5, format="%.1f",
+                                    key="asian_max_move",
+                                    help="Maximum points expected in the 6-7 PM window")
+        
+        if line_ladder_6pm:
+            # Find lines immediately above and below price
+            lines_above = [l for l in line_ladder_6pm if l['value_6pm'] > asian_price]
+            lines_below = [l for l in line_ladder_6pm if l['value_6pm'] <= asian_price]
+            
+            nearest_above = lines_above[-1] if lines_above else None  # closest above
+            nearest_below = lines_below[0] if lines_below else None   # closest below
+            second_above = lines_above[-2] if len(lines_above) >= 2 else None
+            second_below = lines_below[1] if len(lines_below) >= 2 else None
+            
+            # Position description
+            if nearest_above and nearest_below:
+                gap = nearest_above['value_6pm'] - nearest_below['value_6pm']
+                dist_above = nearest_above['value_6pm'] - asian_price
+                dist_below = asian_price - nearest_below['value_6pm']
+                
+                position_text = f"Price is between **{nearest_above['short']}** ({nearest_above['value_6pm']:.2f}, {dist_above:.2f} pts above) and **{nearest_below['short']}** ({nearest_below['value_6pm']:.2f}, {dist_below:.2f} pts below). Gap: {gap:.2f} pts."
+            elif nearest_above and not nearest_below:
+                position_text = f"Price is **BELOW all lines**. Nearest above: {nearest_above['short']} at {nearest_above['value_6pm']:.2f}"
+            elif nearest_below and not nearest_above:
+                position_text = f"Price is **ABOVE all lines**. Nearest below: {nearest_below['short']} at {nearest_below['value_6pm']:.2f}"
+            else:
+                position_text = "No lines available"
+            
+            st.markdown(position_text)
+            
+            st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+            
+            # ============================================================
+            # GENERATE TRADE SETUPS
+            # ============================================================
+            st.markdown("### 📋 Trade Setups (6:00 - 7:00 PM CT)")
+            st.caption("Flat by 7:00 PM before Nikkei opens. Max hold: 1 hour.")
+            
+            trades = []
+            
+            # SETUP 1: SHORT — if there's resistance above and room to drop
+            if nearest_above and nearest_below:
+                # Short setup: price rallies to nearest line above, reject back down
+                short_entry = nearest_above['value_6pm']
+                short_stop = short_entry + 2.0
+                short_t1 = asian_price  # back to current price
+                short_t2 = nearest_below['value_6pm']  # to the line below
+                short_exit_7pm = nearest_above['value_7pm']  # line moves by 7PM
+                
+                # Cap target at max_move
+                if short_entry - short_t2 > max_move:
+                    short_t2 = short_entry - max_move
+                
+                trades.append({
+                    'direction': 'SHORT',
+                    'bias': 'Rejection at resistance',
+                    'trigger': f"Price rallies to {short_entry:.2f} ({nearest_above['short']})",
+                    'entry': short_entry,
+                    'stop': short_stop,
+                    'target_1': short_t1,
+                    'target_2': short_t2,
+                    'risk': short_stop - short_entry,
+                    'reward_1': short_entry - short_t1,
+                    'reward_2': short_entry - short_t2,
+                    'color': '#ff5252',
+                    'icon': '🔻',
+                })
+                
+                # Long setup: price drops to nearest line below, bounce back up
+                long_entry = nearest_below['value_6pm']
+                long_stop = long_entry - 2.0
+                long_t1 = asian_price  # back to current price
+                long_t2 = nearest_above['value_6pm']  # to the line above
+                
+                # Cap target at max_move
+                if long_t2 - long_entry > max_move:
+                    long_t2 = long_entry + max_move
+                
+                trades.append({
+                    'direction': 'LONG',
+                    'bias': 'Bounce at support',
+                    'trigger': f"Price drops to {long_entry:.2f} ({nearest_below['short']})",
+                    'entry': long_entry,
+                    'stop': long_stop,
+                    'target_1': long_t1,
+                    'target_2': long_t2,
+                    'risk': long_entry - long_stop,
+                    'reward_1': long_t1 - long_entry,
+                    'reward_2': long_t2 - long_entry,
+                    'color': '#00e676',
+                    'icon': '🔺',
+                })
+            
+            # SETUP 2: Breakout — if price is already at or past a line
+            if nearest_above and dist_above <= 1.0:
+                # Price is right at resistance — could break through
+                break_entry = nearest_above['value_6pm'] + 0.5
+                break_stop = nearest_above['value_6pm'] - 1.5
+                break_t1 = break_entry + 2.5
+                break_t2 = break_entry + max_move
+                if second_above:
+                    break_t2 = min(break_t2, second_above['value_6pm'])
+                
+                trades.append({
+                    'direction': 'LONG BREAKOUT',
+                    'bias': f"Break above {nearest_above['short']}",
+                    'trigger': f"Price breaks above {nearest_above['value_6pm']:.2f} with momentum",
+                    'entry': break_entry,
+                    'stop': break_stop,
+                    'target_1': break_t1,
+                    'target_2': break_t2,
+                    'risk': break_entry - break_stop,
+                    'reward_1': break_t1 - break_entry,
+                    'reward_2': break_t2 - break_entry,
+                    'color': '#ffd740',
+                    'icon': '⚡',
+                })
+            
+            if nearest_below and dist_below <= 1.0:
+                break_entry = nearest_below['value_6pm'] - 0.5
+                break_stop = nearest_below['value_6pm'] + 1.5
+                break_t1 = break_entry - 2.5
+                break_t2 = break_entry - max_move
+                if second_below:
+                    break_t2 = max(break_t2, second_below['value_6pm'])
+                
+                trades.append({
+                    'direction': 'SHORT BREAKDOWN',
+                    'bias': f"Break below {nearest_below['short']}",
+                    'trigger': f"Price breaks below {nearest_below['value_6pm']:.2f} with momentum",
+                    'entry': break_entry,
+                    'stop': break_stop,
+                    'target_1': break_t1,
+                    'target_2': break_t2,
+                    'risk': break_stop - break_entry,
+                    'reward_1': break_entry - break_t1,
+                    'reward_2': break_entry - break_t2,
+                    'color': '#ffd740',
+                    'icon': '⚡',
+                })
+            
+            # ============================================================
+            # DISPLAY TRADE CARDS
+            # ============================================================
+            for trade in trades:
+                rr1 = trade['reward_1'] / trade['risk'] if trade['risk'] > 0 else 0
+                rr2 = trade['reward_2'] / trade['risk'] if trade['risk'] > 0 else 0
+                
+                st.markdown(f"""
+                <div style="background: linear-gradient(145deg, #131a2e 0%, #0d1220 100%);
+                            border: 1px solid {trade['color']}33; border-radius: 12px;
+                            padding: 16px; margin: 10px 0;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 10px;">
+                        <span style="font-family: Orbitron; font-size: 1.2rem; color: {trade['color']};">
+                            {trade['icon']} {trade['direction']}
+                        </span>
+                        <span style="font-family: Rajdhani; color: #8892b0; font-size: 0.85rem;">
+                            {trade['bias']}
+                        </span>
+                    </div>
+                    <div style="font-family: JetBrains Mono; font-size: 0.8rem; color: #5a6a8a; margin-bottom: 8px;">
+                        Trigger: {trade['trigger']}
+                    </div>
+                    <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap: 8px; text-align:center;">
+                        <div>
+                            <div style="font-family: Rajdhani; color: #5a6a8a; font-size: 0.7rem; text-transform:uppercase;">Entry</div>
+                            <div style="font-family: JetBrains Mono; color: #ccd6f6; font-size: 1.1rem; font-weight:700;">{trade['entry']:.2f}</div>
+                        </div>
+                        <div>
+                            <div style="font-family: Rajdhani; color: #5a6a8a; font-size: 0.7rem; text-transform:uppercase;">Stop</div>
+                            <div style="font-family: JetBrains Mono; color: #ff1744; font-size: 1.1rem; font-weight:700;">{trade['stop']:.2f}</div>
+                            <div style="font-family: JetBrains Mono; color: #5a6a8a; font-size: 0.7rem;">{trade['risk']:.1f} pts</div>
+                        </div>
+                        <div>
+                            <div style="font-family: Rajdhani; color: #5a6a8a; font-size: 0.7rem; text-transform:uppercase;">Target 1</div>
+                            <div style="font-family: JetBrains Mono; color: #00e676; font-size: 1.1rem; font-weight:700;">{trade['target_1']:.2f}</div>
+                            <div style="font-family: JetBrains Mono; color: #5a6a8a; font-size: 0.7rem;">{trade['reward_1']:.1f} pts • {rr1:.1f}R</div>
+                        </div>
+                        <div>
+                            <div style="font-family: Rajdhani; color: #5a6a8a; font-size: 0.7rem; text-transform:uppercase;">Target 2</div>
+                            <div style="font-family: JetBrains Mono; color: #00e676; font-size: 1.1rem; font-weight:700;">{trade['target_2']:.2f}</div>
+                            <div style="font-family: JetBrains Mono; color: #5a6a8a; font-size: 0.7rem;">{trade['reward_2']:.1f} pts • {rr2:.1f}R</div>
+                        </div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+            
+            # ============================================================
+            # RULES REMINDER
+            # ============================================================
+            st.markdown("""
+            <div style="background: linear-gradient(145deg, #131a2e 0%, #0d1220 100%);
+                        border: 1px solid #1e2d4a; border-radius: 12px; padding: 16px; margin: 10px 0;">
+                <div style="font-family: Orbitron; color: #ffd740; font-size: 0.9rem; margin-bottom: 8px;">
+                    ⏰ SESSION RULES
+                </div>
+                <div style="font-family: JetBrains Mono; color: #8892b0; font-size: 0.8rem; line-height: 1.8;">
+                    5:00 PM — Globex opens. NO TRADES. Observe range formation.<br>
+                    6:00 PM — DECISION POINT. Read price vs line ladder. Plan entries.<br>
+                    6:00-7:00 PM — TRADING WINDOW. Execute setups. Max 5 pt move expected.<br>
+                    7:00 PM — HARD CLOSE. Flatten all positions. Nikkei opens.
+                </div>
             </div>
-        </div>
-        """, unsafe_allow_html=True)
+            """, unsafe_allow_html=True)
     
     # ============================================================
     # TAB 3: NY SESSION OPTIONS
