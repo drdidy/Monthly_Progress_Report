@@ -755,6 +755,179 @@ def calculate_confluence(asian_aligns: bool, london_sweep: bool,
     }
 
 
+def auto_detect_confluence(ny_trade_direction: str, ny_ladder: list,
+                           current_price: float, candles_df=None,
+                           es_offset: float = 0) -> dict:
+    """
+    Automatically detect all 5 confluence factors from available data.
+    
+    Args:
+        ny_trade_direction: 'PUT' or 'CALL' from NY signal logic
+        ny_ladder: list of ladder dicts with 'value', 'direction', 'short'
+        current_price: SPX price at 9 AM
+        candles_df: DataFrame of ES 30-min candles (if available)
+        es_offset: ES-SPX spread for converting candle prices
+    
+    Returns:
+        dict with all 5 boolean factors plus detail strings
+    """
+    results = {
+        'asian_aligns': False, 'asian_detail': 'No candle data',
+        'london_sweep': False, 'london_detail': 'No candle data',
+        'data_reaction': 'absorbed', 'data_detail': 'No candle data (default: absorbed)',
+        'opening_drive': False, 'opening_detail': 'No candle data',
+        'line_cluster': False, 'cluster_detail': 'No cluster detected',
+    }
+    
+    # ── Factor 5: Line Cluster (always available from ladder) ──
+    if ny_ladder and len(ny_ladder) >= 3:
+        values = sorted([l['value'] for l in ny_ladder])
+        for i in range(len(values) - 2):
+            if values[i+2] - values[i] <= 5.0:  # 3 lines within 5 points
+                cluster_lines = [l for l in ny_ladder if values[i] <= l['value'] <= values[i+2]]
+                cluster_names = ', '.join([l['short'] for l in cluster_lines[:3]])
+                results['line_cluster'] = True
+                results['cluster_detail'] = f"3 lines within {values[i+2]-values[i]:.1f}pt ({cluster_names})"
+                break
+    
+    if candles_df is None or len(candles_df) == 0:
+        return results
+    
+    try:
+        df = candles_df.copy()
+        # Ensure datetime index
+        if 'Datetime' in df.columns:
+            df['Datetime'] = pd.to_datetime(df['Datetime'])
+            df = df.set_index('Datetime')
+        elif not isinstance(df.index, pd.DatetimeIndex):
+            df.index = pd.to_datetime(df.index)
+        
+        # Convert ES to SPX terms
+        if es_offset != 0:
+            for col in ['Open', 'High', 'Low', 'Close']:
+                if col in df.columns:
+                    df[col] = df[col] - es_offset
+        
+        # Get session candles by hour (CT timezone)
+        # Asian: 5:00 PM - 2:00 AM CT (previous day 17:00 to 02:00)
+        # London: 2:00 AM - 8:30 AM CT
+        # Pre-market data: 7:30-8:00 AM, 8:00-8:30 AM candles
+        # Opening: 8:30-9:00 AM candle
+        
+        hours = df.index.hour
+        minutes = df.index.minute
+        time_decimal = hours + minutes / 60.0
+        
+        # Asian session: 17:00 - 02:00 CT
+        asian_mask = (time_decimal >= 17.0) | (time_decimal < 2.0)
+        asian_candles = df[asian_mask]
+        
+        # London session: 2:00 - 8:30 CT
+        london_mask = (time_decimal >= 2.0) & (time_decimal < 8.5)
+        london_candles = df[london_mask]
+        
+        # Data candle: 7:30-8:00 AM and 8:00-8:30 AM
+        data_mask = (time_decimal >= 7.5) & (time_decimal < 8.5)
+        data_candles = df[data_mask]
+        
+        # Opening drive: 8:30-9:00 AM candle
+        open_mask = (time_decimal >= 8.5) & (time_decimal < 9.0)
+        open_candles = df[open_mask]
+        
+        # ── Factor 1: Asian Session Aligned ──
+        if len(asian_candles) >= 2:
+            asian_open = asian_candles.iloc[0]['Open']
+            asian_close = asian_candles.iloc[-1]['Close']
+            asian_move = asian_close - asian_open
+            
+            if ny_trade_direction == 'PUT' and asian_move < -1.0:
+                results['asian_aligns'] = True
+                results['asian_detail'] = f"Asian sold off {asian_move:.1f}pt → aligns with PUT"
+            elif ny_trade_direction == 'CALL' and asian_move > 1.0:
+                results['asian_aligns'] = True
+                results['asian_detail'] = f"Asian rallied +{asian_move:.1f}pt → aligns with CALL"
+            elif abs(asian_move) <= 1.0:
+                results['asian_detail'] = f"Asian flat ({asian_move:+.1f}pt) → no alignment"
+            else:
+                direction_word = "rallied" if asian_move > 0 else "sold off"
+                results['asian_detail'] = f"Asian {direction_word} {asian_move:+.1f}pt → AGAINST {ny_trade_direction}"
+        
+        # ── Factor 2: London Sweep ──
+        if len(asian_candles) >= 2 and len(london_candles) >= 2:
+            asian_high = asian_candles['High'].max()
+            asian_low = asian_candles['Low'].min()
+            london_high = london_candles['High'].max()
+            london_low = london_candles['Low'].min()
+            london_close = london_candles.iloc[-1]['Close']
+            
+            # London swept Asian high then reversed down → bearish sweep
+            swept_high = london_high > asian_high + 0.5
+            reversed_from_high = london_close < asian_high
+            # London swept Asian low then reversed up → bullish sweep
+            swept_low = london_low < asian_low - 0.5
+            reversed_from_low = london_close > asian_low
+            
+            if ny_trade_direction == 'PUT' and swept_high and reversed_from_high:
+                results['london_sweep'] = True
+                results['london_detail'] = f"London swept Asian high {asian_high:.0f}→{london_high:.0f} then reversed ↓"
+            elif ny_trade_direction == 'CALL' and swept_low and reversed_from_low:
+                results['london_sweep'] = True
+                results['london_detail'] = f"London swept Asian low {asian_low:.0f}→{london_low:.0f} then reversed ↑"
+            elif swept_high or swept_low:
+                results['london_detail'] = f"Sweep detected but against direction"
+            else:
+                results['london_detail'] = f"No sweep (London H:{london_high:.0f} L:{london_low:.0f} vs Asian H:{asian_high:.0f} L:{asian_low:.0f})"
+        
+        # ── Factor 3: Data Reaction (7:30-8:30 AM) ──
+        if len(data_candles) >= 1:
+            data_open = data_candles.iloc[0]['Open']
+            data_high = data_candles['High'].max()
+            data_low = data_candles['Low'].min()
+            data_close = data_candles.iloc[-1]['Close']
+            data_range = data_high - data_low
+            data_move = data_close - data_open
+            
+            # Check if there was a significant spike (> 3pt range = data release)
+            if data_range > 3.0:
+                if ny_trade_direction == 'PUT' and data_move < -1.0:
+                    results['data_reaction'] = 'aligned'
+                    results['data_detail'] = f"Data drop {data_move:+.1f}pt → aligns with PUT"
+                elif ny_trade_direction == 'CALL' and data_move > 1.0:
+                    results['data_reaction'] = 'aligned'
+                    results['data_detail'] = f"Data rally {data_move:+.1f}pt → aligns with CALL"
+                elif abs(data_move) <= 1.0 and data_range > 3.0:
+                    results['data_reaction'] = 'absorbed'
+                    results['data_detail'] = f"Data spike absorbed ({data_range:.1f}pt range, net {data_move:+.1f}pt)"
+                else:
+                    results['data_reaction'] = 'against'
+                    results['data_detail'] = f"Data moved against ({data_move:+.1f}pt vs {ny_trade_direction})"
+            else:
+                results['data_reaction'] = 'absorbed'
+                results['data_detail'] = f"Quiet pre-market ({data_range:.1f}pt range) → neutral"
+        
+        # ── Factor 4: Opening Drive (8:30-9:00 AM) ──
+        if len(open_candles) >= 1:
+            open_o = open_candles.iloc[0]['Open']
+            open_c = open_candles.iloc[-1]['Close']
+            open_move = open_c - open_o
+            
+            if ny_trade_direction == 'PUT' and open_move < -0.5:
+                results['opening_drive'] = True
+                results['opening_detail'] = f"Opening drive down {open_move:+.1f}pt → aligns with PUT"
+            elif ny_trade_direction == 'CALL' and open_move > 0.5:
+                results['opening_drive'] = True
+                results['opening_detail'] = f"Opening drive up {open_move:+.1f}pt → aligns with CALL"
+            else:
+                direction_word = "up" if open_move > 0 else "down" if open_move < 0 else "flat"
+                results['opening_drive'] = False
+                results['opening_detail'] = f"Opening drive {direction_word} {open_move:+.1f}pt → AGAINST {ny_trade_direction}"
+        
+    except Exception as e:
+        results['asian_detail'] = f"Auto-detect error: {str(e)[:50]}"
+    
+    return results
+
+
 # ============================================================
 # SESSION TIME ZONES (all in CT)
 # ============================================================
@@ -2856,18 +3029,79 @@ def main():
         st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
         st.markdown("### 🔗 Confluence Score")
         
-        col1, col2 = st.columns(2)
+        # Auto-detect confluence from candle data
+        candles_for_detection = st.session_state.get('last_fetch_candles', None)
         
-        with col1:
-            asian_aligns = st.checkbox("Asian session aligned with direction", value=False)
-            london_sweep = st.checkbox("London sweep confirmed", value=False)
-            line_cluster = st.checkbox("Lines cluster within 3 points", value=False)
-        
-        with col2:
-            data_reaction = st.radio("7:30 AM Data Reaction", 
-                                      ["aligned", "absorbed", "against"],
-                                      horizontal=True)
-            opening_drive = st.checkbox("8:30-9:00 AM drive aligned", value=False)
+        if trade_direction:
+            auto = auto_detect_confluence(
+                ny_trade_direction=trade_direction,
+                ny_ladder=ny_ladder,
+                current_price=current_price,
+                candles_df=candles_for_detection,
+                es_offset=es_offset_val
+            )
+            
+            has_candle_data = candles_for_detection is not None and len(candles_for_detection) > 0
+            
+            # Show auto-detected values with detail
+            if has_candle_data:
+                st.caption("🤖 Auto-detected from candle data • Toggle overrides below if needed")
+            else:
+                st.caption("⚠️ No candle data — fetch data in Structural Map tab for auto-detection")
+            
+            # Use auto values as defaults, allow manual override
+            allow_override = st.toggle("Manual Override", value=False, key="confluence_override",
+                                        help="Override auto-detected values")
+            
+            if allow_override:
+                col1, col2 = st.columns(2)
+                with col1:
+                    asian_aligns = st.checkbox("Asian session aligned", value=auto['asian_aligns'],
+                                                help=auto['asian_detail'])
+                    london_sweep = st.checkbox("London sweep confirmed", value=auto['london_sweep'],
+                                                help=auto['london_detail'])
+                    line_cluster = st.checkbox("Lines cluster within 5 pts", value=auto['line_cluster'],
+                                                help=auto['cluster_detail'])
+                with col2:
+                    data_reaction = st.radio("7:30 AM Data Reaction", 
+                                              ["aligned", "absorbed", "against"],
+                                              index=["aligned", "absorbed", "against"].index(auto['data_reaction']),
+                                              horizontal=True)
+                    opening_drive = st.checkbox("Opening drive aligned", value=auto['opening_drive'],
+                                                help=auto['opening_detail'])
+            else:
+                asian_aligns = auto['asian_aligns']
+                london_sweep = auto['london_sweep']
+                data_reaction = auto['data_reaction']
+                opening_drive = auto['opening_drive']
+                line_cluster = auto['line_cluster']
+                
+                # Show auto-detected details as styled rows
+                factors_display = [
+                    ("Asian Session", auto['asian_aligns'], auto['asian_detail']),
+                    ("London Sweep", auto['london_sweep'], auto['london_detail']),
+                    ("Data Reaction", auto['data_reaction'] == 'aligned', auto['data_detail']),
+                    ("Opening Drive", auto['opening_drive'], auto['opening_detail']),
+                    ("Line Cluster", auto['line_cluster'], auto['cluster_detail']),
+                ]
+                for name, passed, detail in factors_display:
+                    icon = "✅" if passed else ("⚡" if "absorbed" in detail.lower() else "❌")
+                    color = "#00e676" if passed else ("#ffd740" if "absorbed" in detail.lower() else "#ff5252")
+                    st.markdown(f"""
+                    <div style="display:flex; align-items:center; gap: 10px; padding: 6px 12px; margin: 3px 0;
+                                background: rgba(255,255,255,0.02); border-radius: 8px; border-left: 3px solid {color};">
+                        <span style="font-size: 0.9rem;">{icon}</span>
+                        <span style="font-family: Rajdhani, sans-serif; color: {color}; font-weight: 600; min-width: 120px;">{name}</span>
+                        <span style="font-family: JetBrains Mono, monospace; color: #8892b0; font-size: 0.78rem;">{detail}</span>
+                    </div>
+                    """, unsafe_allow_html=True)
+        else:
+            asian_aligns = False
+            london_sweep = False
+            data_reaction = 'absorbed'
+            opening_drive = False
+            line_cluster = False
+            st.info("Waiting for trade direction signal to calculate confluence...")
         
         confluence = calculate_confluence(asian_aligns, london_sweep, data_reaction,
                                           opening_drive, line_cluster)
