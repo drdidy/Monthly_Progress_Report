@@ -636,6 +636,73 @@ def fetch_es_candles(prior_date, next_date) -> DataSourceStatus:
     return status
 
 
+def calculate_es_spx_spread(es_candles: pd.DataFrame, session_date) -> dict:
+    """
+    Calculate the ES - SPX spread by comparing ES futures to SPX index
+    during overlapping RTH hours. Returns the last spread value.
+    """
+    try:
+        import yfinance as yf
+        
+        start_str = session_date.strftime('%Y-%m-%d')
+        end_str = (session_date + timedelta(days=1)).strftime('%Y-%m-%d')
+        
+        spx = yf.Ticker("^GSPC")
+        spx_df = spx.history(start=start_str, end=end_str, interval="30m")
+        
+        if len(spx_df) == 0:
+            return {'ok': False, 'error': 'No SPX data', 'spread': 0.0}
+        
+        spx_df = spx_df.reset_index()
+        col_map = {}
+        for col in spx_df.columns:
+            cl = col.lower().replace(' ', '_')
+            if 'datetime' in cl or 'date' in cl:
+                col_map[col] = 'datetime'
+            elif cl == 'close':
+                col_map[col] = 'close'
+        spx_df = spx_df.rename(columns=col_map)
+        if 'datetime' not in spx_df.columns:
+            spx_df = spx_df.rename(columns={spx_df.columns[0]: 'datetime'})
+        spx_df['datetime'] = pd.to_datetime(spx_df['datetime'])
+        if spx_df['datetime'].dt.tz is not None:
+            import pytz
+            ct = pytz.timezone('America/Chicago')
+            spx_df['datetime'] = spx_df['datetime'].dt.tz_convert(ct).dt.tz_localize(None)
+        
+        # Round both to nearest 30 min for matching
+        es_rth = es_candles.copy()
+        es_rth['dt_round'] = es_rth['datetime'].dt.round('30min')
+        spx_df['dt_round'] = spx_df['datetime'].dt.round('30min')
+        
+        merged = es_rth.merge(spx_df[['dt_round', 'close']], on='dt_round', 
+                               suffixes=('_es', '_spx'), how='inner')
+        
+        if len(merged) == 0:
+            return {'ok': False, 'error': 'No overlapping candles', 'spread': 0.0}
+        
+        if 'close_es' in merged.columns and 'close_spx' in merged.columns:
+            spreads = merged['close_es'] - merged['close_spx']
+        else:
+            return {'ok': False, 'error': 'Column merge issue', 'spread': 0.0}
+        
+        return {
+            'ok': True, 
+            'spread': round(float(spreads.iloc[-1]), 2),
+            'avg_spread': round(float(spreads.mean()), 2),
+            'samples': len(merged)
+        }
+    except ImportError:
+        return {'ok': False, 'error': 'yfinance not installed', 'spread': 0.0}
+    except Exception as e:
+        return {'ok': False, 'error': str(e), 'spread': 0.0}
+
+
+def apply_offset(items: list, offset: float) -> list:
+    """Subtract offset from prices (ES → SPX conversion)."""
+    return [{'price': item['price'] - offset, 'time': item['time']} for item in items]
+
+
 # ============================================================
 # AUTO-DETECTION ENGINE
 # Detect bounces, rejections, and wick extremes from candle data
@@ -833,8 +900,39 @@ def main():
                     if len(ny_candles) >= 3:
                         detected = detect_inflections(ny_candles)
                         
+                        # Calculate ES-SPX spread
                         st.markdown("---")
-                        st.markdown("### 🔍 Auto-Detected")
+                        st.markdown("### 📐 ES → SPX Offset")
+                        
+                        spread_result = calculate_es_spx_spread(data_status.candles, prior_date)
+                        
+                        if spread_result['ok']:
+                            auto_spread = spread_result['spread']
+                            st.caption(f"Auto-detected: ES - SPX = **{auto_spread:+.2f}** (from {spread_result['samples']} matched candles)")
+                        else:
+                            auto_spread = 0.0
+                            st.caption(f"Could not auto-detect spread: {spread_result['error']}")
+                        
+                        es_offset = st.number_input(
+                            "ES - SPX offset", 
+                            value=auto_spread, step=0.25, format="%.2f",
+                            help="Subtracted from ES prices to approximate SPX levels. Positive = ES trades above SPX."
+                        )
+                        
+                        # Apply offset to detected values
+                        if es_offset != 0:
+                            if detected['bounces']:
+                                detected['bounces'] = apply_offset(detected['bounces'], es_offset)
+                            if detected['rejections']:
+                                detected['rejections'] = apply_offset(detected['rejections'], es_offset)
+                            if detected['highest_wick']:
+                                detected['highest_wick']['price'] -= es_offset
+                            if detected['lowest_wick']:
+                                detected['lowest_wick']['price'] -= es_offset
+                            st.caption(f"✅ Offset of {es_offset:+.2f} applied to all levels")
+                        
+                        st.markdown("---")
+                        st.markdown("### 🔍 Auto-Detected (SPX-adjusted)" if es_offset != 0 else "### 🔍 Auto-Detected")
                         
                         # Bounces
                         if detected['bounces']:
