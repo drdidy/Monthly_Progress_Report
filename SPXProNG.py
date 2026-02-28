@@ -1080,14 +1080,6 @@ def main():
         signal_class = "neutral"
         
         if hw_val and hb_val and lr_val and lw_val:
-            # Sort all four levels to understand the full picture
-            all_levels = sorted([
-                ('HW Asc', hw_val),
-                ('HB Asc', hb_val),
-                ('LR Desc', lr_val),
-                ('LW Desc', lw_val),
-            ], key=lambda x: x[1], reverse=True)
-            
             # The two ascending lines
             asc_high = max(hw_val, hb_val)
             asc_low = min(hw_val, hb_val)
@@ -1100,26 +1092,25 @@ def main():
                 signal = "BULLISH — TREND DAY"
                 signal_detail = f"Price {current_price:.2f} is ABOVE both ascending lines ({asc_low:.2f} & {asc_high:.2f}). Highest ascending line becomes support. Buy CALLS on pullbacks to {asc_high:.2f}."
                 signal_class = "bull"
+            
             elif current_price >= asc_low and current_price <= asc_high:
                 signal = "BETWEEN ASCENDING LINES"
-                signal_detail = f"Price {current_price:.2f} is between ascending lines ({asc_low:.2f} - {asc_high:.2f}). Use {asc_low:.2f} as entry, {asc_high:.2f} as exit."
+                signal_detail = f"Price {current_price:.2f} is between ascending lines. Entry: Highest Bounce line ({hb_val:.2f}). Exit: Highest Wick line ({hw_val:.2f})."
                 signal_class = "neutral"
-            elif current_price < asc_low and current_price > desc_high:
+            
+            elif current_price < asc_low and current_price > desc_low:
                 signal = "BEARISH BIAS"
-                signal_detail = f"Price {current_price:.2f} is BELOW both ascending lines ({asc_low:.2f} & {asc_high:.2f}). Trap set — buyers sucked in above. Buy PUTS. Targets: {desc_high:.2f}, {desc_low:.2f}."
+                signal_detail = f"Price {current_price:.2f} is BELOW both ascending lines ({asc_low:.2f} & {asc_high:.2f}). Buyers trapped above. Buy PUTS. Target 1: {desc_high:.2f}. Target 2: {desc_low:.2f}."
                 signal_class = "bear"
+            
             elif current_price >= desc_low and current_price <= desc_high:
-                signal = "AT DESCENDING ZONE"
-                signal_detail = f"Price {current_price:.2f} is between descending lines ({desc_low:.2f} - {desc_high:.2f}). Use {desc_high:.2f} as entry, {desc_low:.2f} as exit for bear trap CALL setup."
+                signal = "BETWEEN DESCENDING LINES"
+                signal_detail = f"Price {current_price:.2f} is between descending lines. Entry: Lowest Rejection line ({lr_val:.2f}). Exit: Lowest Wick line ({lw_val:.2f})."
                 signal_class = "neutral"
+            
             elif current_price < desc_low:
                 signal = "BEARISH — TREND DAY"
-                signal_detail = f"Price {current_price:.2f} is BELOW both descending lines ({desc_high:.2f} & {desc_low:.2f}). Lowest descending line becomes resistance. Buy PUTS on rallies to {desc_low:.2f}."
-                signal_class = "bear"
-            elif current_price < asc_low and current_price <= desc_high:
-                # Price below ascending but within or below descending zone
-                signal = "BEARISH BIAS"
-                signal_detail = f"Price {current_price:.2f} is BELOW ascending lines ({asc_low:.2f}) and at/near descending zone ({desc_high:.2f} - {desc_low:.2f}). Buy PUTS."
+                signal_detail = f"Price {current_price:.2f} is BELOW all lines including descending ({desc_high:.2f} & {desc_low:.2f}). Lowest descending line becomes resistance. Buy PUTS on rallies to {desc_low:.2f}."
                 signal_class = "bear"
         
         st.markdown(f"""
