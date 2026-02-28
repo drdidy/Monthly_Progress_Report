@@ -704,16 +704,29 @@ def main():
                     x0=session['start'], x1=session['end'],
                     fillcolor=session['color'],
                     line=dict(color=session['border'], width=1, dash='dot'),
-                    annotation_text=session['name'],
-                    annotation_position="top left",
-                    annotation=dict(font_size=10, font_color=session['border'])
+                )
+                # Add session label as separate annotation
+                mid_time = session['start'] + (session['end'] - session['start']) / 2
+                fig.add_annotation(
+                    x=session['start'], y=1, yref="paper",
+                    text=session['name'], showarrow=False,
+                    font=dict(size=10, color=session['border']),
+                    xanchor="left", yshift=10
                 )
         
         # Add 9:00 AM vertical decision line
         nine_am = datetime.combine(next_date, time(9, 0))
-        fig.add_vline(x=nine_am, line_dash="dash", line_color="#ffd740", line_width=2,
-                      annotation_text="9:00 AM Decision", annotation_position="top right",
-                      annotation=dict(font_color="#ffd740", font_size=11))
+        nine_am_ts = nine_am.timestamp() * 1000
+        fig.add_shape(
+            type="line", x0=nine_am, x1=nine_am, y0=0, y1=1,
+            yref="paper", line=dict(color="#ffd740", width=2, dash="dash")
+        )
+        fig.add_annotation(
+            x=nine_am, y=1, yref="paper",
+            text="9:00 AM Decision", showarrow=False,
+            font=dict(color="#ffd740", size=11),
+            yshift=10
+        )
         
         # Plot ascending lines (red)
         for i, asc_line in enumerate(levels['ascending']):
@@ -768,12 +781,16 @@ def main():
         
         for level, color, label in level_configs:
             if level:
-                fig.add_hline(
-                    y=level['value_at_9am'],
-                    line_dash="dot", line_color=color, line_width=1,
-                    annotation_text=f"{label}: {level['value_at_9am']:.2f}",
-                    annotation_position="right",
-                    annotation=dict(font_size=9, font_color=color)
+                fig.add_shape(
+                    type="line", x0=0, x1=1, xref="paper",
+                    y0=level['value_at_9am'], y1=level['value_at_9am'],
+                    line=dict(color=color, width=1, dash="dot")
+                )
+                fig.add_annotation(
+                    x=1, xref="paper", y=level['value_at_9am'],
+                    text=f"{label}: {level['value_at_9am']:.2f}",
+                    showarrow=False, font=dict(size=9, color=color),
+                    xshift=5, xanchor="left"
                 )
         
         # Add anchor point markers
