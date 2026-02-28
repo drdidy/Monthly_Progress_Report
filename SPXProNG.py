@@ -1579,24 +1579,32 @@ def main():
         
         # ============================================================
         # CALCULATE ALL LINE VALUES AT 6 PM CT
+        # Lines are stored as SPX-adjusted if offset was applied.
+        # For ES futures trading, add the offset back.
         # ============================================================
         decision_time_6pm = datetime.combine(overnight_date_tab2, time(18, 0))
         exit_time_7pm = datetime.combine(overnight_date_tab2, time(19, 0))
         
-        # Build the full line ladder at 6 PM
+        # Get the offset to reverse SPX→ES
+        es_offset_asian = st.session_state.get('_es_offset', 0.0)
+        
+        # Build the full line ladder at 6 PM (in ES terms)
         line_ladder_6pm = []
         
         # All ascending lines (bounces + highest wick)
         for line in levels['ascending']:
             val_6pm = calculate_line_value(line['anchor_price'], line['anchor_time'], decision_time_6pm, 'ascending')
             val_7pm = calculate_line_value(line['anchor_price'], line['anchor_time'], exit_time_7pm, 'ascending')
+            # Add offset back: SPX → ES
+            val_6pm += es_offset_asian
+            val_7pm += es_offset_asian
             line_ladder_6pm.append({
                 'name': line['source'].split(' @ ')[0] if ' @ ' in line['source'] else line['source'],
                 'short': f"{'HW' if line['type'] == 'highest_wick' else 'B'} ↗",
                 'value_6pm': val_6pm,
                 'value_7pm': val_7pm,
                 'direction': 'ascending',
-                'anchor': line['anchor_price'],
+                'anchor': line['anchor_price'] + es_offset_asian,
                 'color': '#ff1744' if line['type'] == 'highest_wick' else '#ff5252',
                 'is_key': line['type'] == 'highest_wick',
             })
@@ -1605,13 +1613,16 @@ def main():
         for line in levels['descending']:
             val_6pm = calculate_line_value(line['anchor_price'], line['anchor_time'], decision_time_6pm, 'descending')
             val_7pm = calculate_line_value(line['anchor_price'], line['anchor_time'], exit_time_7pm, 'descending')
+            # Add offset back: SPX → ES
+            val_6pm += es_offset_asian
+            val_7pm += es_offset_asian
             line_ladder_6pm.append({
                 'name': line['source'].split(' @ ')[0] if ' @ ' in line['source'] else line['source'],
                 'short': f"{'LW' if line['type'] == 'lowest_wick' else 'R'} ↘",
                 'value_6pm': val_6pm,
                 'value_7pm': val_7pm,
                 'direction': 'descending',
-                'anchor': line['anchor_price'],
+                'anchor': line['anchor_price'] + es_offset_asian,
                 'color': '#00e676' if line['type'] == 'lowest_wick' else '#69f0ae',
                 'is_key': line['type'] == 'lowest_wick',
             })
@@ -1623,7 +1634,10 @@ def main():
         # 6 PM LINE LADDER DISPLAY
         # ============================================================
         st.markdown("### 📊 Line Ladder @ 6:00 PM CT")
-        st.caption("All projected lines sorted by their value at the decision point")
+        if es_offset_asian != 0:
+            st.caption(f"All values in ES terms (SPX offset of {es_offset_asian:+.2f} added back)")
+        else:
+            st.caption("All projected lines sorted by their value at the decision point")
         
         if line_ladder_6pm:
             ladder_html = '<div style="font-family: JetBrains Mono; font-size: 0.85rem;">'
