@@ -1995,108 +1995,211 @@ def main():
         
         fig = go.Figure()
         
-        # Session boxes using candle indices
+        # ── Session shading with gradient-style overlays ──
         if show_session_boxes:
             session_colors = {
-                'NY': ('rgba(66,133,244,0.08)', 'rgba(66,133,244,0.3)'),
-                'Globex': ('rgba(255,215,0,0.05)', 'rgba(255,215,0,0.2)'),
-                'Tokyo': ('rgba(233,30,99,0.05)', 'rgba(233,30,99,0.2)'),
-                'London': ('rgba(0,188,212,0.05)', 'rgba(0,188,212,0.2)'),
-                'NY2': ('rgba(66,133,244,0.08)', 'rgba(66,133,244,0.3)'),
+                'NY': ('rgba(0,212,255,0.04)', 'rgba(0,212,255,0.12)'),
+                'Globex': ('rgba(255,215,64,0.03)', 'rgba(255,215,64,0.08)'),
+                'Tokyo': ('rgba(233,30,99,0.03)', 'rgba(233,30,99,0.08)'),
+                'London': ('rgba(123,47,247,0.03)', 'rgba(123,47,247,0.08)'),
+                'NY2': ('rgba(0,212,255,0.04)', 'rgba(0,212,255,0.12)'),
+            }
+            session_labels = {
+                'NY': '🇺🇸 NEW YORK', 'Globex': '🌐 GLOBEX', 
+                'Tokyo': '🇯🇵 TOKYO', 'London': '🇬🇧 LONDON', 'NY2': '🇺🇸 NY'
             }
             
             for skey, sname, s_start, s_end in session_blocks:
-                sfill, sborder = session_colors.get(skey, ('rgba(128,128,128,0.05)', 'rgba(128,128,128,0.2)'))
+                sfill, sborder = session_colors.get(skey, ('rgba(128,128,128,0.03)', 'rgba(128,128,128,0.1)'))
                 s_idx = [i for i, t in enumerate(master_times) if s_start <= t <= s_end]
                 if s_idx:
                     fig.add_vrect(x0=min(s_idx), x1=max(s_idx), fillcolor=sfill,
                         line=dict(color=sborder, width=1, dash='dot'))
+                    # Session label at top
+                    label = session_labels.get(skey, sname)
+                    fig.add_annotation(
+                        x=(min(s_idx) + max(s_idx)) / 2, y=1.02, yref="paper",
+                        text=f"<b>{label}</b>", showarrow=False,
+                        font=dict(color=sborder.replace('0.08','0.6').replace('0.12','0.6'), size=9, family="Rajdhani"),
+                    )
         
-        
-        # 9:00 AM decision line
+        # ── 9:00 AM Decision Line — prominent golden line ──
         nine_am = datetime.combine(next_date, time(9, 0))
-        nine_am_ts = nine_am.timestamp() * 1000
         if nine_am in time_to_idx:
             idx9 = time_to_idx[nine_am]
             fig.add_shape(type="line", x0=idx9, x1=idx9, y0=0, y1=1, yref="paper",
                 line=dict(color="#ffd740", width=2, dash="dash"))
-            fig.add_annotation(x=idx9, y=1, yref="paper", text="9:00 AM Decision",
-                showarrow=False, font=dict(color="#ffd740", size=11), yshift=10)
+            fig.add_annotation(x=idx9, y=1.05, yref="paper", 
+                text="<b>9:00 AM DECISION</b>",
+                showarrow=False, font=dict(color="#ffd740", size=11, family="Orbitron"))
         
+        # ── Ascending lines (bounce/wick) with glow effect ──
         for li, asc_line in enumerate(levels['ascending']):
             series = generate_line_series(asc_line['anchor_price'], asc_line['anchor_time'], chart_start, chart_end, 'ascending')
             xi = [time_to_idx[t] for t, _ in series if t in time_to_idx]
             yi = [p for t, p in series if t in time_to_idx]
             if xi:
                 is_wick = asc_line['type'] == 'highest_wick'
+                line_color = '#ff1744' if is_wick else '#ff5252'
+                line_width = 3 if is_wick else 2
+                opacity = 1.0 if is_wick or show_all_lines else 0.35
+                
+                # Glow layer (wider, transparent) for key lines
+                if is_wick or show_all_lines:
+                    fig.add_trace(go.Scatter(x=xi, y=yi, mode='lines',
+                        line=dict(color=line_color, width=line_width + 6), opacity=0.08,
+                        showlegend=False, hoverinfo='skip'))
+                
                 fig.add_trace(go.Scatter(x=xi, y=yi, mode='lines',
                     name=f"↗ {'HW' if is_wick else f'B{li+1}'}: {asc_line['anchor_price']:.1f}",
-                    line=dict(color='#ff1744' if is_wick else '#ff5252', width=3 if is_wick else 2, dash='solid' if is_wick else 'dash'),
-                    opacity=1.0 if is_wick or show_all_lines else 0.4))
+                    line=dict(color=line_color, width=line_width, dash='solid' if is_wick else 'dash'),
+                    opacity=opacity,
+                    hovertemplate=f"{'HW' if is_wick else f'Bounce {li+1}'}<br>Price: %{{y:.2f}}<extra></extra>"))
         
+        # ── Descending lines (rejection/wick) with glow effect ──
         for li, desc_line in enumerate(levels['descending']):
             series = generate_line_series(desc_line['anchor_price'], desc_line['anchor_time'], chart_start, chart_end, 'descending')
             xi = [time_to_idx[t] for t, _ in series if t in time_to_idx]
             yi = [p for t, p in series if t in time_to_idx]
             if xi:
                 is_wick = desc_line['type'] == 'lowest_wick'
+                line_color = '#00e676' if is_wick else '#69f0ae'
+                line_width = 3 if is_wick else 2
+                opacity = 1.0 if is_wick or show_all_lines else 0.35
+                
+                # Glow layer
+                if is_wick or show_all_lines:
+                    fig.add_trace(go.Scatter(x=xi, y=yi, mode='lines',
+                        line=dict(color=line_color, width=line_width + 6), opacity=0.08,
+                        showlegend=False, hoverinfo='skip'))
+                
                 fig.add_trace(go.Scatter(x=xi, y=yi, mode='lines',
                     name=f"↘ {'LW' if is_wick else f'R{li+1}'}: {desc_line['anchor_price']:.1f}",
-                    line=dict(color='#00e676' if is_wick else '#69f0ae', width=3 if is_wick else 2, dash='solid' if is_wick else 'dash'),
-                    opacity=1.0 if is_wick or show_all_lines else 0.4))
+                    line=dict(color=line_color, width=line_width, dash='solid' if is_wick else 'dash'),
+                    opacity=opacity,
+                    hovertemplate=f"{'LW' if is_wick else f'Rejection {li+1}'}<br>Price: %{{y:.2f}}<extra></extra>"))
         
+        # ── 9 AM Key Level horizontal lines with enhanced labels ──
         key = levels['key_levels']
-        for level, color, label in [
-            (key['highest_wick_ascending'], '#ff1744', 'HW Asc @ 9AM'),
-            (key['highest_bounce_ascending'], '#ff5252', 'HB Asc @ 9AM'),
-            (key['lowest_rejection_descending'], '#69f0ae', 'LR Desc @ 9AM'),
-            (key['lowest_wick_descending'], '#00e676', 'LW Desc @ 9AM'),
-        ]:
+        level_configs = [
+            (key['highest_wick_ascending'], '#ff1744', 'HW', '▲'),
+            (key['highest_bounce_ascending'], '#ff5252', 'HB', '△'),
+            (key['lowest_rejection_descending'], '#69f0ae', 'LR', '▽'),
+            (key['lowest_wick_descending'], '#00e676', 'LW', '▼'),
+        ]
+        for level, color, label, icon in level_configs:
             if level:
                 fig.add_shape(type="line", x0=0, x1=len(master_times)-1,
                     y0=level['value_at_9am'], y1=level['value_at_9am'],
                     line=dict(color=color, width=1, dash="dot"))
                 fig.add_annotation(x=len(master_times)-1, y=level['value_at_9am'],
-                    text=f"{label}: {level['value_at_9am']:.2f}",
-                    showarrow=False, font=dict(size=9, color=color), xshift=5, xanchor="left")
+                    text=f"<b>{icon} {label}</b> {level['value_at_9am']:.2f}",
+                    showarrow=False, font=dict(size=10, color=color, family='JetBrains Mono'), 
+                    xshift=8, xanchor="left",
+                    bgcolor='rgba(6,9,16,0.8)', bordercolor=color, borderwidth=1, borderpad=3)
         
+        # ── Bounce markers with enhanced styling ──
         for bounce in bounces:
             if bounce['time'] in time_to_idx:
-                fig.add_trace(go.Scatter(x=[time_to_idx[bounce['time']]], y=[bounce['price']],
-                    mode='markers', marker=dict(symbol='triangle-up', size=14, color='#ff5252', line=dict(width=2, color='white')), showlegend=False))
+                fig.add_trace(go.Scatter(
+                    x=[time_to_idx[bounce['time']]], y=[bounce['price']],
+                    mode='markers', showlegend=False,
+                    marker=dict(symbol='triangle-up', size=14, color='#ff5252',
+                        line=dict(width=1.5, color='rgba(255,82,82,0.5)')),
+                    hovertemplate=f"<b>BOUNCE</b><br>{bounce['price']:.2f}<br>{bounce['time'].strftime('%I:%M %p')}<extra></extra>"
+                ))
         for rejection in rejections:
             if rejection['time'] in time_to_idx:
-                fig.add_trace(go.Scatter(x=[time_to_idx[rejection['time']]], y=[rejection['price']],
-                    mode='markers', marker=dict(symbol='triangle-down', size=14, color='#69f0ae', line=dict(width=2, color='white')), showlegend=False))
-        if highest_wick['time'] in time_to_idx:
-            fig.add_trace(go.Scatter(x=[time_to_idx[highest_wick['time']]], y=[highest_wick['price']],
-                mode='markers', marker=dict(symbol='diamond', size=14, color='#ff1744', line=dict(width=2, color='white')), showlegend=False))
-        if lowest_wick['time'] in time_to_idx:
-            fig.add_trace(go.Scatter(x=[time_to_idx[lowest_wick['time']]], y=[lowest_wick['price']],
-                mode='markers', marker=dict(symbol='diamond', size=14, color='#00e676', line=dict(width=2, color='white')), showlegend=False))
+                fig.add_trace(go.Scatter(
+                    x=[time_to_idx[rejection['time']]], y=[rejection['price']],
+                    mode='markers', showlegend=False,
+                    marker=dict(symbol='triangle-down', size=14, color='#69f0ae',
+                        line=dict(width=1.5, color='rgba(105,240,174,0.5)')),
+                    hovertemplate=f"<b>REJECTION</b><br>{rejection['price']:.2f}<br>{rejection['time'].strftime('%I:%M %p')}<extra></extra>"
+                ))
         
-        # Live price line on chart
+        # ── Wick markers — diamonds with glow ring ──
+        if highest_wick['time'] in time_to_idx:
+            fig.add_trace(go.Scatter(
+                x=[time_to_idx[highest_wick['time']]], y=[highest_wick['price']],
+                mode='markers', showlegend=False,
+                marker=dict(symbol='diamond', size=16, color='#ff1744',
+                    line=dict(width=2, color='rgba(255,23,68,0.6)')),
+                hovertemplate=f"<b>HIGHEST WICK</b><br>{highest_wick['price']:.2f}<extra></extra>"
+            ))
+        if lowest_wick['time'] in time_to_idx:
+            fig.add_trace(go.Scatter(
+                x=[time_to_idx[lowest_wick['time']]], y=[lowest_wick['price']],
+                mode='markers', showlegend=False,
+                marker=dict(symbol='diamond', size=16, color='#00e676',
+                    line=dict(width=2, color='rgba(0,230,118,0.6)')),
+                hovertemplate=f"<b>LOWEST WICK</b><br>{lowest_wick['price']:.2f}<extra></extra>"
+            ))
+        
+        # ── Live price line — golden pulse ──
         if live_mode and live_price_data and live_price_data.get('ok'):
             live_spx = live_price_data['price'] - es_offset_val
-            # Full-width horizontal dashed line
+            # Glow band
+            fig.add_hline(y=live_spx, line_dash="dot", line_color="rgba(255,215,64,0.15)", line_width=12)
+            # Main line
             fig.add_hline(y=live_spx, line_dash="dot", line_color="#ffd740", line_width=2,
-                          annotation_text=f"LIVE {live_spx:.2f}",
+                          annotation_text=f"<b>◉ LIVE {live_spx:.2f}</b>",
                           annotation_position="right",
                           annotation_font=dict(color="#ffd740", size=12, family="Orbitron"))
         
+        # ── Chart layout — terminal cockpit aesthetic ──
         fig.update_layout(
-            template='plotly_dark', paper_bgcolor='#0a0a0f', plot_bgcolor='#0d1117',
-            height=700, margin=dict(l=60, r=200, t=40, b=60),
-            xaxis=dict(gridcolor='#1a2332', showgrid=False, tickmode='array',
-                tickvals=tick_vals, ticktext=tick_texts, tickangle=0, 
-                tickfont=dict(size=11, family='Rajdhani', color='#8892b0')),
-            yaxis=dict(gridcolor='#1a2332', showgrid=True, tickformat='.2f', side='right'),
-            legend=dict(bgcolor='rgba(13,18,32,0.9)', bordercolor='#1e2d4a', borderwidth=1,
-                font=dict(size=10, family='JetBrains Mono'), x=1.01, y=1),
-            font=dict(family='JetBrains Mono', color='#8892b0'), hovermode='x unified',
+            template='plotly_dark',
+            paper_bgcolor='rgba(5,8,16,1)',
+            plot_bgcolor='rgba(8,13,22,1)',
+            height=750,
+            margin=dict(l=10, r=200, t=50, b=60),
+            xaxis=dict(
+                gridcolor='rgba(30,45,74,0.15)',
+                showgrid=True, gridwidth=1,
+                zeroline=False,
+                tickmode='array', tickvals=tick_vals, ticktext=tick_texts, tickangle=0,
+                tickfont=dict(size=11, family='Rajdhani', color='#3a4a6a'),
+                showline=True, linecolor='rgba(30,45,74,0.3)', linewidth=1,
+                spikemode='across', spikethickness=1, spikecolor='rgba(0,212,255,0.3)',
+                spikesnap='cursor', spikedash='dot',
+            ),
+            yaxis=dict(
+                gridcolor='rgba(30,45,74,0.12)',
+                showgrid=True, gridwidth=1,
+                zeroline=False,
+                tickformat='.2f', side='right',
+                tickfont=dict(size=11, family='JetBrains Mono', color='#5a6a8a'),
+                showline=True, linecolor='rgba(30,45,74,0.3)', linewidth=1,
+                spikemode='across', spikethickness=1, spikecolor='rgba(0,212,255,0.3)',
+                spikesnap='cursor', spikedash='dot',
+            ),
+            legend=dict(
+                bgcolor='rgba(6,9,16,0.95)', 
+                bordercolor='rgba(30,45,74,0.4)', borderwidth=1,
+                font=dict(size=10, family='JetBrains Mono', color='#8892b0'), 
+                x=1.01, y=1,
+                itemsizing='constant',
+            ),
+            font=dict(family='JetBrains Mono', color='#8892b0'),
+            hovermode='x unified',
+            hoverlabel=dict(
+                bgcolor='rgba(6,9,16,0.95)',
+                bordercolor='rgba(0,212,255,0.2)',
+                font=dict(family='JetBrains Mono', size=11, color='#ccd6f6'),
+            ),
+            dragmode='pan',
         )
         
-        st.plotly_chart(fig, use_container_width=True)
+        # Chart config for clean interaction
+        chart_config = {
+            'displayModeBar': True,
+            'modeBarButtonsToRemove': ['autoScale2d', 'lasso2d', 'select2d'],
+            'displaylogo': False,
+            'scrollZoom': True,
+        }
+        
+        st.plotly_chart(fig, use_container_width=True, config=chart_config)
         
         # ============================================================
         # 9 AM LINE LADDER (all lines sorted by value)
