@@ -982,159 +982,36 @@ def main():
     # TAB 2: ASIAN SESSION FUTURES
     # ============================================================
     with tab2:
-        st.markdown("### 🌙 Asian Session Futures Module")
-        st.markdown("*Futures Desk — ES/MES • Target: 5 points*")
+        st.markdown("### 🌙 Asian Session — Projected Line Levels")
+        st.markdown("*Where are the lines during the overnight session?*")
         
         st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
         
-        # Prop Firm Accounts
-        st.markdown("### 💼 Account Status")
-        
-        accounts = [
-            {"name": "Account 1", "daily_limit": 800, "max_dd": -2000, "started": "2/18/26", "days": "8 of 5"},
-            {"name": "Account 2", "daily_limit": 800, "max_dd": -2000, "started": "2/23/26", "days": "4 of 5"},
-            {"name": "Account 3", "daily_limit": 400, "max_dd": -2000, "started": "2/24/26", "days": "3 of 5"},
-        ]
-        
-        cols = st.columns(3)
-        for idx, acct in enumerate(accounts):
-            with cols[idx]:
-                st.markdown(f"""
-                <div class="prop-account">
-                    <div class="metric-label">{acct['name']}</div>
-                    <div class="metric-value-neutral" style="font-size:1.2rem;">
-                        Daily Limit: ${acct['daily_limit']}
-                    </div>
-                    <div class="metric-label" style="margin-top:8px;">
-                        Max DD: ${acct['max_dd']:,} • Started: {acct['started']}<br>
-                        Days Traded: {acct['days']}
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-        
-        st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-        
-        # Position Size Calculator
-        st.markdown("### 📐 Position Size Calculator")
-        
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            selected_account = st.selectbox("Select Account", 
-                                            ["Account 1 ($800)", "Account 2 ($800)", "Account 3 ($400)"])
-        with col2:
-            stop_distance = st.number_input("Stop Distance (points)", value=3.0, step=0.25, 
-                                            min_value=1.0, max_value=20.0)
-        with col3:
-            instrument = st.selectbox("Instrument", ["ES ($50/pt)", "MES ($5/pt)"])
-        
-        daily_limit = 400 if "400" in selected_account else 800
-        instr = "ES" if "ES" in instrument else "MES"
-        
-        risk = calculate_prop_firm_risk(daily_limit, stop_distance, instr)
-        
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-label">Contracts</div>
-                <div class="metric-value-neutral">{risk['contracts']} {instr}</div>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        with col2:
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-label">Risk Per Trade</div>
-                <div class="metric-value-bear">${risk['risk_per_trade']:.0f}</div>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        with col3:
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-label">Profit on 5pt Move</div>
-                <div class="metric-value-bull">${risk['profit_5pt_move']:.0f}</div>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        with col4:
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-label">After 1 Loss, Remaining</div>
-                <div class="metric-value-neutral">${risk['remaining_after_1_loss']:.0f}</div>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        # ES-specific display for the bigger accounts
-        if instr == "ES":
-            st.markdown(f"""
-            <div class="metric-card" style="text-align:center; margin-top:10px;">
-                <div class="metric-label">RECOMMENDED SETUP</div>
-                <div style="font-family: 'JetBrains Mono'; color: #00d4ff; font-size: 1.3rem; margin-top: 8px;">
-                    {risk['contracts']} ES × 5pt target = ${risk['profit_5pt_move']:.0f} per trade
-                </div>
-                <div style="font-family: 'Rajdhani'; color: #5a6a8a; font-size: 0.9rem; margin-top: 5px;">
-                    Stop: {stop_distance}pt (${risk['risk_per_trade']:.0f} risk) • Max 2 trades per session • 
-                    R:R = {5/stop_distance:.1f}
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-        
-        # Asian Session Trading Windows
-        st.markdown("### 🕐 Trading Windows")
-        
-        st.markdown("""
-        <div class="metric-card">
-            <table style="width:100%; font-family: 'JetBrains Mono'; color: #8892b0; font-size: 0.85rem;">
-                <tr style="border-bottom: 1px solid #1e2d4a;">
-                    <td style="padding: 8px; color: #5a6a8a;">5:00 - 6:00 PM CT</td>
-                    <td style="padding: 8px;">Globex Open</td>
-                    <td style="padding: 8px; color: #ffd740;">⚡ Watch for gap fills at projected lines</td>
-                </tr>
-                <tr style="border-bottom: 1px solid #1e2d4a;">
-                    <td style="padding: 8px; color: #5a6a8a;">6:00 - 8:00 PM CT</td>
-                    <td style="padding: 8px;">Sydney / Early Tokyo</td>
-                    <td style="padding: 8px; color: #ff5252;">🔇 Dead zone — avoid unless at a line</td>
-                </tr>
-                <tr style="border-bottom: 1px solid #1e2d4a;">
-                    <td style="padding: 8px; color: #5a6a8a;">8:00 PM - 12:00 AM CT</td>
-                    <td style="padding: 8px;">Tokyo Active</td>
-                    <td style="padding: 8px; color: #00e676;">✅ PRIMARY WINDOW — Best setups here</td>
-                </tr>
-                <tr>
-                    <td style="padding: 8px; color: #5a6a8a;">12:00 - 2:00 AM CT</td>
-                    <td style="padding: 8px;">Tokyo Close / Pre-London</td>
-                    <td style="padding: 8px; color: #ffd740;">⚡ Secondary window — new moves can start</td>
-                </tr>
-            </table>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-        
-        # Quick reference: where are lines right now
-        st.markdown("### 📍 Line Values at Key Times")
-        
-        # Determine correct overnight date (Sunday for Friday, prior_date otherwise)
-        prior_wd = prior_date.weekday() if hasattr(prior_date, 'weekday') else datetime.combine(prior_date, time(0,0)).weekday()
-        if prior_wd == 4:  # Friday
-            overnight_date = next_date - timedelta(days=1)  # Sunday
+        # Determine correct overnight date
+        prior_wd_tab2 = prior_date.weekday() if hasattr(prior_date, 'weekday') else datetime.combine(prior_date, time(0,0)).weekday()
+        if prior_wd_tab2 == 4:  # Friday
+            overnight_date_tab2 = next_date - timedelta(days=1)  # Sunday
+            st.markdown("*⚠️ Friday → Monday: Globex opens Sunday 5:00 PM CT*")
         else:
-            overnight_date = prior_date
+            overnight_date_tab2 = prior_date
         
+        # Line Values at Key Overnight Times
         key_times_ct = [
-            ("5:00 PM (Globex Open)", time(17, 0), overnight_date),
-            ("8:00 PM (Tokyo Active)", time(20, 0), overnight_date),
-            ("10:00 PM", time(22, 0), overnight_date),
-            ("12:00 AM", time(0, 0), next_date),
-            ("2:00 AM (London Open)", time(2, 0), next_date),
-            ("7:30 AM (Data Drop)", time(7, 30), next_date),
-            ("8:30 AM (Market Open)", time(8, 30), next_date),
-            ("9:00 AM (Decision)", time(9, 0), next_date),
+            ("5:00 PM — Globex Open", time(17, 0), overnight_date_tab2),
+            ("6:00 PM — Sydney", time(18, 0), overnight_date_tab2),
+            ("7:00 PM — Pre-Tokyo", time(19, 0), overnight_date_tab2),
+            ("8:00 PM — Tokyo Active", time(20, 0), overnight_date_tab2),
+            ("9:00 PM", time(21, 0), overnight_date_tab2),
+            ("10:00 PM", time(22, 0), overnight_date_tab2),
+            ("11:00 PM", time(23, 0), overnight_date_tab2),
+            ("12:00 AM — Midnight", time(0, 0), next_date),
+            ("1:00 AM", time(1, 0), next_date),
+            ("2:00 AM — London Open", time(2, 0), next_date),
+            ("4:00 AM", time(4, 0), next_date),
+            ("6:00 AM", time(6, 0), next_date),
+            ("7:30 AM — Data Drop", time(7, 30), next_date),
+            ("8:30 AM — Market Open", time(8, 30), next_date),
+            ("9:00 AM — Decision", time(9, 0), next_date),
         ]
         
         time_table = []
@@ -1142,29 +1019,38 @@ def main():
             dt = datetime.combine(d, t)
             row = {'Time (CT)': label}
             
-            # Highest wick ascending
             hw = levels['key_levels']['highest_wick_ascending']
             if hw:
-                row['HW Asc'] = f"{calculate_line_value(hw['anchor_price'], hw['anchor_time'], dt, 'ascending'):.2f}"
+                row['HW Asc ↗'] = f"{calculate_line_value(hw['anchor_price'], hw['anchor_time'], dt, 'ascending'):.2f}"
             
-            # Highest bounce ascending
             hb = levels['key_levels']['highest_bounce_ascending']
             if hb:
-                row['HB Asc'] = f"{calculate_line_value(hb['anchor_price'], hb['anchor_time'], dt, 'ascending'):.2f}"
+                row['HB Asc ↗'] = f"{calculate_line_value(hb['anchor_price'], hb['anchor_time'], dt, 'ascending'):.2f}"
             
-            # Lowest rejection descending
             lr = levels['key_levels']['lowest_rejection_descending']
             if lr:
-                row['LR Desc'] = f"{calculate_line_value(lr['anchor_price'], lr['anchor_time'], dt, 'descending'):.2f}"
+                row['LR Desc ↘'] = f"{calculate_line_value(lr['anchor_price'], lr['anchor_time'], dt, 'descending'):.2f}"
             
-            # Lowest wick descending
             lw = levels['key_levels']['lowest_wick_descending']
             if lw:
-                row['LW Desc'] = f"{calculate_line_value(lw['anchor_price'], lw['anchor_time'], dt, 'descending'):.2f}"
+                row['LW Desc ↘'] = f"{calculate_line_value(lw['anchor_price'], lw['anchor_time'], dt, 'descending'):.2f}"
             
             time_table.append(row)
         
-        st.dataframe(pd.DataFrame(time_table), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(time_table), use_container_width=True, hide_index=True, height=560)
+        
+        st.markdown("""
+        <div class="metric-card" style="margin-top:10px;">
+            <div style="font-family: 'JetBrains Mono'; color: #8892b0; font-size: 0.85rem;">
+                <strong style="color: #ff5252;">HW Asc ↗</strong> = Highest Wick Ascending • 
+                <strong style="color: #ff5252;">HB Asc ↗</strong> = Highest Bounce Ascending<br>
+                <strong style="color: #69f0ae;">LR Desc ↘</strong> = Lowest Rejection Descending • 
+                <strong style="color: #69f0ae;">LW Desc ↘</strong> = Lowest Wick Descending<br><br>
+                <strong style="color: #ffd740;">Trade Setup:</strong> When price touches a projected line during Tokyo Active (8PM-12AM CT), 
+                enter with 3pt stop, 5pt target. Max 2 trades per session.
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
     
     # ============================================================
     # TAB 3: NY SESSION OPTIONS
@@ -1194,32 +1080,47 @@ def main():
         signal_class = "neutral"
         
         if hw_val and hb_val and lr_val and lw_val:
-            upper_high = max(hw_val, hb_val)
-            upper_low = min(hw_val, hb_val)
-            lower_high = max(lr_val, lw_val)
-            lower_low = min(lr_val, lw_val)
+            # Sort all four levels to understand the full picture
+            all_levels = sorted([
+                ('HW Asc', hw_val),
+                ('HB Asc', hb_val),
+                ('LR Desc', lr_val),
+                ('LW Desc', lw_val),
+            ], key=lambda x: x[1], reverse=True)
             
-            if current_price > upper_high:
+            # The two ascending lines
+            asc_high = max(hw_val, hb_val)
+            asc_low = min(hw_val, hb_val)
+            
+            # The two descending lines
+            desc_high = max(lr_val, lw_val)
+            desc_low = min(lr_val, lw_val)
+            
+            if current_price > asc_high:
                 signal = "BULLISH — TREND DAY"
-                signal_detail = f"Price {current_price:.2f} is ABOVE all ascending lines. Highest ascending line ({upper_high:.2f}) becomes support. Look for bounces off this line to buy calls."
+                signal_detail = f"Price {current_price:.2f} is ABOVE both ascending lines ({asc_low:.2f} & {asc_high:.2f}). Highest ascending line becomes support. Buy CALLS on pullbacks to {asc_high:.2f}."
                 signal_class = "bull"
-            elif current_price < upper_low:
-                if current_price > lower_high:
-                    signal = "BEARISH BIAS"
-                    signal_detail = f"Price {current_price:.2f} is BELOW ascending lines ({upper_low:.2f} - {upper_high:.2f}). The trap has set — market sucked in buyers above and rejected. Buy PUTS."
-                    signal_class = "bear"
-                elif current_price < lower_low:
-                    signal = "BEARISH — TREND DAY"
-                    signal_detail = f"Price {current_price:.2f} is BELOW all descending lines. Lowest descending line ({lower_low:.2f}) becomes resistance. Look for rejections off this line to buy puts."
-                    signal_class = "bear"
-                else:
-                    signal = "AT DESCENDING ZONE"
-                    signal_detail = f"Price {current_price:.2f} is between descending lines ({lower_low:.2f} - {lower_high:.2f}). Use lowest rejection line as entry, lowest wick line as exit for CALL setup (bear trap)."
-                    signal_class = "neutral"
-            else:
+            elif current_price >= asc_low and current_price <= asc_high:
                 signal = "BETWEEN ASCENDING LINES"
-                signal_detail = f"Price {current_price:.2f} is between ascending lines ({upper_low:.2f} - {upper_high:.2f}). Use highest bounce line as entry, highest wick line as exit."
+                signal_detail = f"Price {current_price:.2f} is between ascending lines ({asc_low:.2f} - {asc_high:.2f}). Use {asc_low:.2f} as entry, {asc_high:.2f} as exit."
                 signal_class = "neutral"
+            elif current_price < asc_low and current_price > desc_high:
+                signal = "BEARISH BIAS"
+                signal_detail = f"Price {current_price:.2f} is BELOW both ascending lines ({asc_low:.2f} & {asc_high:.2f}). Trap set — buyers sucked in above. Buy PUTS. Targets: {desc_high:.2f}, {desc_low:.2f}."
+                signal_class = "bear"
+            elif current_price >= desc_low and current_price <= desc_high:
+                signal = "AT DESCENDING ZONE"
+                signal_detail = f"Price {current_price:.2f} is between descending lines ({desc_low:.2f} - {desc_high:.2f}). Use {desc_high:.2f} as entry, {desc_low:.2f} as exit for bear trap CALL setup."
+                signal_class = "neutral"
+            elif current_price < desc_low:
+                signal = "BEARISH — TREND DAY"
+                signal_detail = f"Price {current_price:.2f} is BELOW both descending lines ({desc_high:.2f} & {desc_low:.2f}). Lowest descending line becomes resistance. Buy PUTS on rallies to {desc_low:.2f}."
+                signal_class = "bear"
+            elif current_price < asc_low and current_price <= desc_high:
+                # Price below ascending but within or below descending zone
+                signal = "BEARISH BIAS"
+                signal_detail = f"Price {current_price:.2f} is BELOW ascending lines ({asc_low:.2f}) and at/near descending zone ({desc_high:.2f} - {desc_low:.2f}). Buy PUTS."
+                signal_class = "bear"
         
         st.markdown(f"""
         <div class="signal-box-{signal_class}">
