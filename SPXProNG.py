@@ -735,6 +735,109 @@ def fetch_live_price() -> dict:
         return {'ok': False, 'error': str(e), 'price': 0}
 
 
+def estimate_option_premium(spx_price: float, strike: float, vix: float,
+                             hours_to_expiry: float, opt_type: str) -> float:
+    """
+    Estimate 0DTE SPX option premium using Black-Scholes approximation.
+    
+    Args:
+        spx_price: Current SPX index price
+        strike: Strike price
+        vix: Current VIX level
+        hours_to_expiry: Hours until 3:00 PM CT close
+        opt_type: 'CALL' or 'PUT'
+    
+    Returns:
+        Estimated premium per share (multiply by 100 for contract cost)
+    """
+    import math
+    
+    if hours_to_expiry <= 0:
+        # At expiry, intrinsic only
+        if opt_type == 'CALL':
+            return max(0, spx_price - strike)
+        else:
+            return max(0, strike - spx_price)
+    
+    # Annualized vol from VIX
+    daily_vol = vix / 100 / (252 ** 0.5)
+    # Scale to remaining hours (6.5 hour trading day)
+    intraday_vol = daily_vol * (hours_to_expiry / 6.5) ** 0.5
+    
+    # Simplified Black-Scholes
+    d1_denom = intraday_vol if intraday_vol > 0.0001 else 0.0001
+    moneyness = math.log(spx_price / strike) / d1_denom if strike > 0 else 0
+    
+    # Normal CDF approximation
+    def norm_cdf(x):
+        return 0.5 * (1 + math.erf(x / (2 ** 0.5)))
+    
+    d1 = moneyness / d1_denom + 0.5 * d1_denom if d1_denom > 0.0001 else 0
+    d2 = d1 - d1_denom
+    
+    if opt_type == 'CALL':
+        premium = spx_price * norm_cdf(d1) - strike * norm_cdf(d2)
+    else:
+        premium = strike * norm_cdf(-d2) - spx_price * norm_cdf(-d1)
+    
+    return max(0.10, round(premium * 4) / 4)  # min $0.10, round to 0.25
+
+
+def project_premium_at_scenarios(current_spx: float, strike: float, vix: float,
+                                  opt_type: str, stop_price: float,
+                                  tp1_price: float, tp2_price: float,
+                                  base_premium: float = None,
+                                  current_hours: float = 6.5,
+                                  entry_hours: float = 5.9) -> dict:
+    """
+    Project option premium at 9:05 AM entry under three scenarios using actual trade levels.
+    
+    If base_premium (live 8:30 AM price) is available, calibrates the model to match it,
+    then projects forward. Otherwise uses pure estimation.
+    
+    Args:
+        current_spx: SPX price right now
+        strike: Option strike
+        vix: Current VIX
+        opt_type: 'CALL' or 'PUT'
+        stop_price: SPX stop loss level
+        tp1_price: SPX Target 1 level
+        tp2_price: SPX Target 2 level  
+        base_premium: Live premium pulled at 8:30 AM (None if unavailable)
+        current_hours: Hours to expiry at time of live pull (default 6.5 = 8:30 AM)
+        entry_hours: Hours to expiry at 9:05 AM entry (default 5.9)
+    
+    Returns:
+        Dict with scenario projections
+    """
+    # Estimate premiums at different SPX levels at entry time
+    est_at_entry = estimate_option_premium(current_spx, strike, vix, entry_hours, opt_type)
+    est_at_stop = estimate_option_premium(stop_price, strike, vix, entry_hours, opt_type)
+    est_at_tp1 = estimate_option_premium(tp1_price, strike, vix, entry_hours, opt_type)
+    est_at_tp2 = estimate_option_premium(tp2_price, strike, vix, entry_hours, opt_type)
+    
+    # If we have a live base premium, calibrate with a scaling factor
+    if base_premium and base_premium > 0:
+        est_now = estimate_option_premium(current_spx, strike, vix, current_hours, opt_type)
+        if est_now > 0:
+            calibration = base_premium / est_now
+        else:
+            calibration = 1.0
+        
+        est_at_entry = round(est_at_entry * calibration * 4) / 4
+        est_at_stop = round(est_at_stop * calibration * 4) / 4
+        est_at_tp1 = round(est_at_tp1 * calibration * 4) / 4
+        est_at_tp2 = round(est_at_tp2 * calibration * 4) / 4
+    
+    return {
+        'at_entry': max(0.25, est_at_entry),
+        'at_stop': max(0.25, est_at_stop),
+        'at_tp1': max(0.25, est_at_tp1),
+        'at_tp2': max(0.25, est_at_tp2),
+        'calibrated': base_premium is not None and base_premium > 0,
+    }
+
+
 # ============================================================
 # AUTO-DETECTION ENGINE
 # Detect bounces, rejections, and wick extremes from candle data
@@ -1535,37 +1638,67 @@ def main():
         st.plotly_chart(fig, use_container_width=True)
         
         # ============================================================
-        # ALL LINES TABLE
+        # 9 AM LINE LADDER (all lines sorted by value)
         # ============================================================
-        st.markdown("### 📋 All Projected Lines at 9:00 AM CT")
+        st.markdown("### 📊 Line Ladder @ 9:00 AM CT")
+        st.caption("All projected lines sorted by 9 AM value — highest to lowest")
         
-        col1, col2 = st.columns(2)
+        # Build unified ladder
+        ladder_9am = []
+        for line in levels['ascending']:
+            ladder_9am.append({
+                'name': line['source'].split(' @ ')[0] if ' @ ' in line['source'] else line['source'],
+                'short': f"{'HW' if line['type'] == 'highest_wick' else 'B'} ↗",
+                'value': line['value_at_9am'],
+                'anchor': line['anchor_price'],
+                'change': line['value_at_9am'] - line['anchor_price'],
+                'direction': 'ascending',
+                'color': '#ff1744' if line['type'] == 'highest_wick' else '#ff5252',
+                'is_key': line['type'] in ('highest_wick', 'highest_bounce'),
+            })
+        for line in levels['descending']:
+            ladder_9am.append({
+                'name': line['source'].split(' @ ')[0] if ' @ ' in line['source'] else line['source'],
+                'short': f"{'LW' if line['type'] == 'lowest_wick' else 'R'} ↘",
+                'value': line['value_at_9am'],
+                'anchor': line['anchor_price'],
+                'change': line['value_at_9am'] - line['anchor_price'],
+                'direction': 'descending',
+                'color': '#00e676' if line['type'] == 'lowest_wick' else '#69f0ae',
+                'is_key': line['type'] in ('lowest_wick', 'lowest_rejection'),
+            })
         
-        with col1:
-            st.markdown("**🔺 Ascending Lines (Red)**")
-            asc_data = []
-            for line in levels['ascending']:
-                asc_data.append({
-                    'Source': line['source'],
-                    'Anchor Price': f"{line['anchor_price']:.2f}",
-                    'Value @ 9AM': f"{line['value_at_9am']:.2f}",
-                    'Change': f"+{line['value_at_9am'] - line['anchor_price']:.2f}"
-                })
-            if asc_data:
-                st.dataframe(pd.DataFrame(asc_data), use_container_width=True, hide_index=True)
+        ladder_9am.sort(key=lambda x: x['value'], reverse=True)
         
-        with col2:
-            st.markdown("**🔻 Descending Lines (Green)**")
-            desc_data = []
-            for line in levels['descending']:
-                desc_data.append({
-                    'Source': line['source'],
-                    'Anchor Price': f"{line['anchor_price']:.2f}",
-                    'Value @ 9AM': f"{line['value_at_9am']:.2f}",
-                    'Change': f"{line['value_at_9am'] - line['anchor_price']:.2f}"
-                })
-            if desc_data:
-                st.dataframe(pd.DataFrame(desc_data), use_container_width=True, hide_index=True)
+        if ladder_9am:
+            ladder_html = '<div style="font-family: JetBrains Mono; font-size: 0.85rem;">'
+            for i, line in enumerate(ladder_9am):
+                bg = 'rgba(255,23,68,0.08)' if line['direction'] == 'ascending' else 'rgba(0,230,118,0.08)'
+                border = line['color']
+                weight = 'bold' if line['is_key'] else 'normal'
+                key_tag = ' ★' if line['is_key'] else ''
+                change_sign = '+' if line['change'] >= 0 else ''
+                ladder_html += f"""
+                <div style="display:flex; justify-content:space-between; align-items:center;
+                            padding: 8px 12px; margin: 2px 0; border-left: 3px solid {border};
+                            background: {bg}; border-radius: 0 6px 6px 0;">
+                    <span style="color: {line['color']}; min-width: 130px; font-weight: {weight};">
+                        {line['short']} {line['name'][:20]}{key_tag}
+                    </span>
+                    <span style="color: #ccd6f6; font-weight: 700; min-width: 80px; text-align:right;">
+                        {line['value']:.2f}
+                    </span>
+                    <span style="color: #5a6a8a; font-size: 0.75rem; min-width: 100px; text-align:right;">
+                        Anchor: {line['anchor']:.2f}
+                    </span>
+                    <span style="color: {'#00e676' if line['change'] >= 0 else '#ff5252'}; font-size: 0.75rem; min-width: 70px; text-align:right;">
+                        {change_sign}{line['change']:.2f}
+                    </span>
+                </div>"""
+            ladder_html += '</div>'
+            st.markdown(ladder_html, unsafe_allow_html=True)
+            
+            st.caption("★ = Key decision level (highest bounce, lowest rejection, wicks)")
     
     # ============================================================
     # TAB 2: ASIAN SESSION FUTURES — 6 PM DECISION FRAMEWORK
@@ -1921,15 +2054,17 @@ def main():
             """, unsafe_allow_html=True)
     
     # ============================================================
-    # TAB 3: NY SESSION OPTIONS
+    # TAB 3: NY SESSION OPTIONS — 9 AM DECISION FRAMEWORK
     # ============================================================
     with tab3:
-        st.markdown("### ☀️ NY Session Options Module")
-        st.markdown("*Tastytrade — Naked SPX Calls & Puts • 0DTE*")
+        st.markdown("### ☀️ NY Session — SPX 0DTE Options")
+        st.markdown("*Tastytrade • 20pt OTM • 3 Contracts • Exit at SPX Level*")
         
         st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
         
-        # 9 AM Read
+        # ============================================================
+        # 9 AM PRICE INPUT
+        # ============================================================
         st.markdown("### 🎯 9:00 AM Decision Framework")
         
         # Auto-fill from live price if available
@@ -1937,59 +2072,128 @@ def main():
         if live_mode and live_price_data and live_price_data.get('ok'):
             default_price = live_price_data['price'] - es_offset_val
         
-        current_price = st.number_input("Current SPX Price", 
+        current_price = st.number_input("Current SPX Price at 9:00 AM CT", 
                                          value=default_price, step=0.5, format="%.2f",
                                          key="current_spx",
                                          help="Auto-filled from live ES price when LIVE MODE is on")
         
-        # Determine position relative to lines
-        hw_val = levels['key_levels']['highest_wick_ascending']['value_at_9am'] if levels['key_levels']['highest_wick_ascending'] else None
-        hb_val = levels['key_levels']['highest_bounce_ascending']['value_at_9am'] if levels['key_levels']['highest_bounce_ascending'] else None
-        lr_val = levels['key_levels']['lowest_rejection_descending']['value_at_9am'] if levels['key_levels']['lowest_rejection_descending'] else None
-        lw_val = levels['key_levels']['lowest_wick_descending']['value_at_9am'] if levels['key_levels']['lowest_wick_descending'] else None
+        # ============================================================
+        # BUILD 9 AM LINE LADDER (reuse from structural map)
+        # ============================================================
+        ny_ladder = []
+        for line in levels['ascending']:
+            ny_ladder.append({
+                'name': line['source'].split(' @ ')[0] if ' @ ' in line['source'] else line['source'],
+                'short': f"{'HW' if line['type'] == 'highest_wick' else 'B'} ↗",
+                'value': line['value_at_9am'],
+                'direction': 'ascending',
+                'color': '#ff1744' if line['type'] == 'highest_wick' else '#ff5252',
+            })
+        for line in levels['descending']:
+            ny_ladder.append({
+                'name': line['source'].split(' @ ')[0] if ' @ ' in line['source'] else line['source'],
+                'short': f"{'LW' if line['type'] == 'lowest_wick' else 'R'} ↘",
+                'value': line['value_at_9am'],
+                'direction': 'descending',
+                'color': '#00e676' if line['type'] == 'lowest_wick' else '#69f0ae',
+            })
+        ny_ladder.sort(key=lambda x: x['value'], reverse=True)
         
-        # Determine signal
+        # Find nearest lines above and below current price
+        lines_above = [l for l in ny_ladder if l['value'] > current_price]
+        lines_below = [l for l in ny_ladder if l['value'] <= current_price]
+        
+        nearest_above = lines_above[-1] if lines_above else None
+        nearest_below = lines_below[0] if lines_below else None
+        
+        # ============================================================
+        # POSITION & SIGNAL
+        # ============================================================
+        # Count ascending vs descending lines above/below
+        asc_above = sum(1 for l in lines_above if l['direction'] == 'ascending')
+        desc_below = sum(1 for l in lines_below if l['direction'] == 'descending')
+        
+        # Determine signal based on position
         signal = "NEUTRAL"
         signal_detail = ""
         signal_class = "neutral"
+        trade_direction = None  # 'PUT' or 'CALL'
+        stop_line = None
+        target_lines = []
         
-        if hw_val and hb_val and lr_val and lw_val:
-            # The two ascending lines
-            asc_high = max(hw_val, hb_val)
-            asc_low = min(hw_val, hb_val)
+        if nearest_above and nearest_below:
+            dist_above = nearest_above['value'] - current_price
+            dist_below = current_price - nearest_below['value']
             
-            # The two descending lines
-            desc_high = max(lr_val, lw_val)
-            desc_low = min(lr_val, lw_val)
+            # Check if price is below all ascending lines
+            all_asc_values = [l['value'] for l in ny_ladder if l['direction'] == 'ascending']
+            all_desc_values = [l['value'] for l in ny_ladder if l['direction'] == 'descending']
             
-            if current_price > asc_high:
-                signal = "BULLISH — TREND DAY"
-                signal_detail = f"Price {current_price:.2f} is ABOVE both ascending lines ({asc_low:.2f} & {asc_high:.2f}). Highest ascending line becomes support. Buy CALLS on pullbacks to {asc_high:.2f}."
+            if all_asc_values and current_price < min(all_asc_values):
+                # Below ALL ascending lines = bearish
+                signal = "BEARISH — BUY PUTS"
+                signal_class = "bear"
+                trade_direction = "PUT"
+                stop_line = nearest_above  # line above = invalidation
+                target_lines = [l for l in lines_below if l['direction'] == 'descending'][:2]
+                signal_detail = f"Price {current_price:.2f} is BELOW all ascending lines. Buyers trapped above. Stop: {stop_line['value']:.2f} ({stop_line['short']})"
+                
+            elif all_desc_values and current_price > max(all_desc_values) and all_asc_values and current_price > max(all_asc_values):
+                # Above ALL lines = strong bullish
+                signal = "BULLISH TREND — BUY CALLS"
                 signal_class = "bull"
-            
-            elif current_price >= asc_low and current_price <= asc_high:
-                signal = "BETWEEN ASCENDING LINES"
-                signal_detail = f"Price {current_price:.2f} is between ascending lines. Entry: Highest Bounce line ({hb_val:.2f}). Exit: Highest Wick line ({hw_val:.2f})."
-                signal_class = "neutral"
-            
-            elif current_price < asc_low and current_price > desc_low:
-                signal = "BEARISH BIAS"
-                signal_detail = f"Price {current_price:.2f} is BELOW both ascending lines ({asc_low:.2f} & {asc_high:.2f}). Buyers trapped above. Buy PUTS. Target 1: {desc_high:.2f}. Target 2: {desc_low:.2f}."
+                trade_direction = "CALL"
+                stop_line = nearest_below
+                target_lines = []  # no ceiling, use fixed targets
+                signal_detail = f"Price {current_price:.2f} is ABOVE all lines. Strong trend day. Stop: {stop_line['value']:.2f} ({stop_line['short']})"
+                
+            elif all_desc_values and current_price < min(all_desc_values):
+                # Below ALL lines = strong bearish
+                signal = "BEARISH TREND — BUY PUTS"
                 signal_class = "bear"
-            
-            elif current_price >= desc_low and current_price <= desc_high:
-                signal = "BETWEEN DESCENDING LINES"
-                signal_detail = f"Price {current_price:.2f} is between descending lines. Entry: Lowest Rejection line ({lr_val:.2f}). Exit: Lowest Wick line ({lw_val:.2f})."
+                trade_direction = "PUT"
+                stop_line = nearest_above
+                target_lines = []
+                signal_detail = f"Price {current_price:.2f} is BELOW all lines including descending. Stop: {stop_line['value']:.2f} ({stop_line['short']})"
+                
+            elif all_asc_values and current_price > max(all_asc_values):
+                # Above all ascending = bullish
+                signal = "BULLISH — BUY CALLS"
+                signal_class = "bull"
+                trade_direction = "CALL"
+                stop_line = nearest_below
+                target_lines = [l for l in lines_above if l['direction'] == 'ascending'][:2]
+                signal_detail = f"Price {current_price:.2f} is ABOVE all ascending lines. Stop: {stop_line['value']:.2f} ({stop_line['short']})"
+                
+            elif nearest_above['direction'] == 'ascending' and nearest_below['direction'] == 'descending':
+                # Between ascending above and descending below — choppy, wait
+                signal = "BETWEEN ASC ↗ & DESC ↘ — WAIT"
                 signal_class = "neutral"
-            
-            elif current_price < desc_low:
-                signal = "BEARISH — TREND DAY"
-                signal_detail = f"Price {current_price:.2f} is BELOW all lines including descending ({desc_high:.2f} & {desc_low:.2f}). Lowest descending line becomes resistance. Buy PUTS on rallies to {desc_low:.2f}."
+                signal_detail = f"Price {current_price:.2f} between {nearest_above['short']} ({nearest_above['value']:.2f}) and {nearest_below['short']} ({nearest_below['value']:.2f}). No clear bias."
+                
+            elif nearest_above['direction'] == 'descending':
+                # Descending line above = resistance, bearish lean
+                signal = "BEARISH LEAN — BUY PUTS"
                 signal_class = "bear"
+                trade_direction = "PUT"
+                stop_line = nearest_above
+                target_lines = [l for l in lines_below][:2]
+                signal_detail = f"Descending resistance at {nearest_above['value']:.2f} above. Stop: {stop_line['value']:.2f}"
+                
+            elif nearest_below['direction'] == 'ascending':
+                # Ascending line below = support, bullish lean
+                signal = "BULLISH LEAN — BUY CALLS"
+                signal_class = "bull"
+                trade_direction = "CALL"
+                stop_line = nearest_below
+                target_lines = [l for l in lines_above][:2]
+                signal_detail = f"Ascending support at {nearest_below['value']:.2f} below. Stop: {stop_line['value']:.2f}"
         
+        # Signal display
+        sig_color = '#00e676' if signal_class == 'bull' else '#ff1744' if signal_class == 'bear' else '#ffd740'
         st.markdown(f"""
         <div class="signal-box-{signal_class}">
-            <div style="font-family: 'Orbitron'; font-size: 1.5rem; color: {'#00e676' if signal_class == 'bull' else '#ff1744' if signal_class == 'bear' else '#ffd740'};">
+            <div style="font-family: 'Orbitron'; font-size: 1.5rem; color: {sig_color};">
                 {signal}
             </div>
             <div style="font-family: 'Rajdhani'; font-size: 1rem; color: #8892b0; margin-top: 10px;">
@@ -1998,9 +2202,356 @@ def main():
         </div>
         """, unsafe_allow_html=True)
         
+        # ============================================================
+        # LINE LADDER WITH PRICE POSITION
+        # ============================================================
         st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+        st.markdown("### 📊 9 AM Line Ladder — Price Position")
         
-        # Confluence Score
+        if ny_ladder:
+            ladder_html = '<div style="font-family: JetBrains Mono; font-size: 0.85rem;">'
+            price_inserted = False
+            
+            for i, line in enumerate(ny_ladder):
+                # Insert price marker when we pass below it
+                if not price_inserted and line['value'] <= current_price:
+                    ladder_html += f"""
+                    <div style="display:flex; justify-content:center; align-items:center;
+                                padding: 6px 12px; margin: 4px 0; border: 2px solid {sig_color};
+                                background: rgba(255,215,64,0.1); border-radius: 8px;">
+                        <span style="color: {sig_color}; font-weight: 700; font-size: 1.1rem;">
+                            ▶ SPX: {current_price:.2f} ◀
+                        </span>
+                    </div>"""
+                    price_inserted = True
+                
+                bg = 'rgba(255,23,68,0.08)' if line['direction'] == 'ascending' else 'rgba(0,230,118,0.08)'
+                dist = current_price - line['value']
+                dist_str = f"{'▲' if dist > 0 else '▼'}{abs(dist):.1f}"
+                
+                ladder_html += f"""
+                <div style="display:flex; justify-content:space-between; align-items:center;
+                            padding: 6px 12px; margin: 2px 0; border-left: 3px solid {line['color']};
+                            background: {bg}; border-radius: 0 6px 6px 0;">
+                    <span style="color: {line['color']}; min-width: 120px;">{line['short']} {line['name'][:18]}</span>
+                    <span style="color: #ccd6f6; font-weight: 700;">{line['value']:.2f}</span>
+                    <span style="color: #5a6a8a; font-size: 0.75rem;">{dist_str}</span>
+                </div>"""
+            
+            # If price is below all lines
+            if not price_inserted:
+                ladder_html += f"""
+                <div style="display:flex; justify-content:center; padding: 6px 12px; margin: 4px 0;
+                            border: 2px solid {sig_color}; background: rgba(255,215,64,0.1); border-radius: 8px;">
+                    <span style="color: {sig_color}; font-weight: 700; font-size: 1.1rem;">
+                        ▶ SPX: {current_price:.2f} ◀
+                    </span>
+                </div>"""
+            
+            ladder_html += '</div>'
+            st.markdown(ladder_html, unsafe_allow_html=True)
+        
+        # ============================================================
+        # OPTIONS TRADE CARD
+        # ============================================================
+        if trade_direction:
+            st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+            st.markdown("### 📋 0DTE Trade Setup")
+            
+            # Calculate strike: 20 points OTM, rounded to nearest 5
+            if trade_direction == "PUT":
+                raw_strike = current_price - 20
+                strike = int(raw_strike // 5) * 5  # round down to nearest 5
+            else:
+                raw_strike = current_price + 20
+                strike = int((raw_strike + 4) // 5) * 5  # round up to nearest 5
+            
+            otm_distance = abs(strike - current_price)
+            
+            # Stop and targets (SPX levels)
+            stop_price = stop_line['value'] if stop_line else (current_price + 10 if trade_direction == "PUT" else current_price - 10)
+            
+            if target_lines:
+                tp1 = target_lines[0]['value']
+                tp1_name = f"{target_lines[0]['short']}"
+                tp2 = target_lines[1]['value'] if len(target_lines) >= 2 else (tp1 - 5 if trade_direction == "PUT" else tp1 + 5)
+                tp2_name = f"{target_lines[1]['short']}" if len(target_lines) >= 2 else "Fixed 5pt"
+            else:
+                # Trend day — no opposing lines, use fixed targets
+                if trade_direction == "PUT":
+                    tp1 = current_price - 10
+                    tp2 = current_price - 20
+                else:
+                    tp1 = current_price + 10
+                    tp2 = current_price + 20
+                tp1_name = "10pt move"
+                tp2_name = "20pt move"
+            
+            # ============================================================
+            # PREMIUM: Auto-fetch + Scenario Projections
+            # ============================================================
+            
+            # Fetch VIX
+            try:
+                import yfinance as yf
+                vix_data = yf.Ticker("^VIX").history(period="1d")
+                current_vix = float(vix_data['Close'].iloc[-1]) if len(vix_data) > 0 else 18.0
+            except:
+                current_vix = 18.0
+            
+            import math
+            from datetime import time as dt_time
+            
+            # Determine current time context for hours-to-expiry
+            try:
+                import pytz
+                ct_tz = pytz.timezone('America/Chicago')
+                now_ct = datetime.now(ct_tz).replace(tzinfo=None)
+                market_close = datetime.combine(next_date, dt_time(15, 0))
+                hours_now = max(0.1, (market_close - now_ct).total_seconds() / 3600)
+            except:
+                hours_now = 6.5  # default to 8:30 AM
+            
+            # Hours at 9:05 AM entry
+            entry_dt = datetime.combine(next_date, dt_time(9, 5))
+            hours_at_entry = max(0.1, (market_close - entry_dt).total_seconds() / 3600)
+            
+            # Black-Scholes estimate (always available)
+            est_premium = estimate_option_premium(current_price, strike, current_vix, hours_at_entry, trade_direction)
+            
+            # Auto-fetch live premium when LIVE MODE is on and market is open
+            live_premium = None
+            live_bid = None
+            live_ask = None
+            
+            auto_fetch = live_mode and hours_now < 7.0 and hours_now > 0.5  # between 8:00 AM and 2:30 PM
+            manual_fetch = False
+            
+            if not auto_fetch:
+                col_f1, col_f2 = st.columns([3, 1])
+                with col_f1:
+                    st.markdown(f"""
+                    <div style="font-family: JetBrains Mono; color: #8892b0; font-size: 0.85rem;">
+                        VIX: {current_vix:.1f} • Pre-Market Est: ${est_premium:.2f}/contract
+                    </div>""", unsafe_allow_html=True)
+                with col_f2:
+                    manual_fetch = st.button("📊 Fetch Live Price", key="fetch_tt_chain")
+            
+            if auto_fetch or manual_fetch:
+                try:
+                    import requests as req
+                    tt_token = st.session_state.get('_tt_session_token', '')
+                    
+                    if not tt_token:
+                        # Authenticate with Tastytrade
+                        tt_user = st.secrets.get("tastytrade", {}).get("username", "")
+                        tt_pass = st.secrets.get("tastytrade", {}).get("password", "")
+                        if tt_user and tt_pass:
+                            auth_resp = req.post("https://api.tastytrade.com/sessions",
+                                                  json={"login": tt_user, "password": tt_pass}, timeout=10)
+                            if auth_resp.status_code in (200, 201):
+                                tt_token = auth_resp.json().get("data", {}).get("session-token", "")
+                                st.session_state['_tt_session_token'] = tt_token
+                    
+                    if tt_token:
+                        headers = {"Authorization": tt_token, "Content-Type": "application/json"}
+                        
+                        # Build OCC symbol
+                        exp_date = next_date
+                        date_str = exp_date.strftime("%y%m%d")
+                        opt_char = "C" if trade_direction == "CALL" else "P"
+                        strike_str = f"{int(strike * 1000):08d}"
+                        occ_symbol = f"SPXW  {date_str}{opt_char}{strike_str}"
+                        
+                        quote_url = f"https://api.tastytrade.com/market-data/{occ_symbol}/quote"
+                        quote_resp = req.get(quote_url, headers=headers, timeout=10)
+                        
+                        if quote_resp.status_code == 200:
+                            q = quote_resp.json().get("data", {})
+                            live_bid = float(q.get("bid", 0))
+                            live_ask = float(q.get("ask", 0))
+                            mid = (live_bid + live_ask) / 2 if live_bid and live_ask else 0
+                            if mid > 0:
+                                live_premium = mid
+                                st.session_state['_live_premium'] = mid
+                                st.session_state['_live_premium_hours'] = hours_now
+                except Exception as e:
+                    if manual_fetch:
+                        st.warning(f"Could not fetch: {str(e)[:80]}")
+            
+            # Also check session state for previously fetched premium
+            if not live_premium and '_live_premium' in st.session_state:
+                live_premium = st.session_state['_live_premium']
+                hours_now = st.session_state.get('_live_premium_hours', hours_now)
+            
+            # Project premiums at entry using actual trade levels
+            scenarios = project_premium_at_scenarios(
+                current_spx=current_price,
+                strike=strike,
+                vix=current_vix,
+                opt_type=trade_direction,
+                stop_price=stop_price,
+                tp1_price=tp1,
+                tp2_price=tp2,
+                base_premium=live_premium,
+                current_hours=hours_now,
+                entry_hours=hours_at_entry,
+            )
+            
+            # Determine which premium to use for the trade card
+            final_premium = scenarios['at_entry']
+            cost_per_contract = final_premium * 100
+            num_contracts = 3
+            total_cost = num_contracts * cost_per_contract
+            
+            # Source indicator
+            if live_premium:
+                premium_source = "🔴 LIVE → Projected to 9:05 AM"
+            else:
+                premium_source = "📐 Estimated at 9:05 AM"
+            
+            # ============================================================
+            # SCENARIO TABLE
+            # ============================================================
+            st.markdown("### 💲 Premium Projections @ 9:05 AM Entry")
+            if scenarios['calibrated']:
+                st.caption(f"Calibrated from live pull: ${live_premium:.2f} (Bid ${live_bid:.2f} / Ask ${live_ask:.2f})")
+            else:
+                st.caption(f"Black-Scholes estimate • VIX: {current_vix:.1f} • {hours_at_entry:.1f}hrs to expiry")
+            
+            # Scenario cards
+            scenario_data = [
+                ("AT ENTRY", f"SPX @ {current_price:.2f}", scenarios['at_entry'], '#ccd6f6', 
+                 f"{current_price:.0f}", "Your expected entry cost"),
+                ("AT STOP ✋", f"SPX @ {stop_price:.2f}", scenarios['at_stop'], '#ff1744',
+                 f"{stop_price:.0f}", f"Option value if stopped ({stop_line['short'] if stop_line else 'N/A'})"),
+                ("AT TP1 🎯", f"SPX @ {tp1:.2f}", scenarios['at_tp1'], '#00e676',
+                 f"{tp1:.0f}", f"Option value at Target 1 ({tp1_name})"),
+                ("AT TP2 🎯🎯", f"SPX @ {tp2:.2f}", scenarios['at_tp2'], '#00e676',
+                 f"{tp2:.0f}", f"Option value at Target 2 ({tp2_name})"),
+            ]
+            
+            scenario_html = '<div style="display:grid; grid-template-columns: repeat(4, 1fr); gap: 10px;">'
+            for label, spx_label, prem, color, spx_short, desc in scenario_data:
+                pnl_per_contract = (prem - scenarios['at_entry']) * 100
+                pnl_total = pnl_per_contract * num_contracts
+                pnl_color = '#00e676' if pnl_total >= 0 else '#ff1744'
+                pnl_sign = '+' if pnl_total >= 0 else ''
+                
+                scenario_html += f"""
+                <div style="background: linear-gradient(145deg, #131a2e 0%, #0d1220 100%);
+                            border: 1px solid {color}33; border-radius: 10px; padding: 12px; text-align:center;">
+                    <div style="font-family: Rajdhani; color: {color}; font-size: 0.75rem; text-transform:uppercase;
+                                letter-spacing: 1px;">{label}</div>
+                    <div style="font-family: JetBrains Mono; color: #5a6a8a; font-size: 0.7rem; margin: 2px 0;">
+                        {spx_label}</div>
+                    <div style="font-family: JetBrains Mono; color: {color}; font-size: 1.4rem; font-weight:700;">
+                        ${prem:.2f}</div>
+                    <div style="font-family: JetBrains Mono; color: #5a6a8a; font-size: 0.7rem;">
+                        ${prem*100:.0f}/contract</div>
+                    <div style="font-family: JetBrains Mono; color: {pnl_color}; font-size: 0.8rem; margin-top: 4px;">
+                        {pnl_sign}${pnl_total:,.0f}</div>
+                    <div style="font-family: Rajdhani; color: #3a4a6a; font-size: 0.65rem; margin-top: 2px;">
+                        {desc}</div>
+                </div>"""
+            scenario_html += '</div>'
+            st.markdown(scenario_html, unsafe_allow_html=True)
+            
+            st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+            
+            # Trade card
+            trade_color = '#ff5252' if trade_direction == 'PUT' else '#00e676'
+            trade_icon = '🔻' if trade_direction == 'PUT' else '🔺'
+            
+            st.markdown(f"""
+            <div style="background: linear-gradient(145deg, #131a2e 0%, #0d1220 100%);
+                        border: 2px solid {trade_color}44; border-radius: 12px;
+                        padding: 20px; margin: 10px 0;">
+                
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 15px;">
+                    <span style="font-family: Orbitron; font-size: 1.4rem; color: {trade_color};">
+                        {trade_icon} BUY {trade_direction} — SPX {strike}
+                    </span>
+                    <span style="font-family: JetBrains Mono; color: #5a6a8a; font-size: 0.8rem;">
+                        {otm_distance:.0f}pt OTM • 0DTE • {premium_source}
+                    </span>
+                </div>
+                
+                <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap: 12px; text-align:center; margin-bottom: 15px;">
+                    <div style="background: rgba(255,255,255,0.03); border-radius: 8px; padding: 12px;">
+                        <div style="font-family: Rajdhani; color: #5a6a8a; font-size: 0.7rem; text-transform:uppercase;">Premium</div>
+                        <div style="font-family: JetBrains Mono; color: #ccd6f6; font-size: 1.3rem; font-weight:700;">${final_premium:.2f}</div>
+                        <div style="font-family: JetBrains Mono; color: #5a6a8a; font-size: 0.7rem;">${cost_per_contract:.0f} / contract</div>
+                    </div>
+                    <div style="background: rgba(255,255,255,0.03); border-radius: 8px; padding: 12px;">
+                        <div style="font-family: Rajdhani; color: #5a6a8a; font-size: 0.7rem; text-transform:uppercase;">Contracts</div>
+                        <div style="font-family: JetBrains Mono; color: #ccd6f6; font-size: 1.3rem; font-weight:700;">{num_contracts}</div>
+                        <div style="font-family: JetBrains Mono; color: #5a6a8a; font-size: 0.7rem;">× ${cost_per_contract:.0f} ea</div>
+                    </div>
+                    <div style="background: rgba(255,255,255,0.03); border-radius: 8px; padding: 12px;">
+                        <div style="font-family: Rajdhani; color: #5a6a8a; font-size: 0.7rem; text-transform:uppercase;">Total Risk</div>
+                        <div style="font-family: JetBrains Mono; color: #ff1744; font-size: 1.3rem; font-weight:700;">${total_cost:,.0f}</div>
+                        <div style="font-family: JetBrains Mono; color: #5a6a8a; font-size: 0.7rem;">Max loss = premium</div>
+                    </div>
+                </div>
+                
+                <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap: 12px; text-align:center;">
+                    <div style="background: rgba(255,23,68,0.08); border-radius: 8px; padding: 12px;">
+                        <div style="font-family: Rajdhani; color: #ff1744; font-size: 0.7rem; text-transform:uppercase;">Stop Loss (SPX)</div>
+                        <div style="font-family: JetBrains Mono; color: #ff1744; font-size: 1.3rem; font-weight:700;">{stop_price:.2f}</div>
+                        <div style="font-family: JetBrains Mono; color: #5a6a8a; font-size: 0.7rem;">{stop_line['short'] if stop_line else 'Fixed'} • {abs(current_price - stop_price):.1f}pt</div>
+                    </div>
+                    <div style="background: rgba(0,230,118,0.08); border-radius: 8px; padding: 12px;">
+                        <div style="font-family: Rajdhani; color: #00e676; font-size: 0.7rem; text-transform:uppercase;">Target 1 (SPX)</div>
+                        <div style="font-family: JetBrains Mono; color: #00e676; font-size: 1.3rem; font-weight:700;">{tp1:.2f}</div>
+                        <div style="font-family: JetBrains Mono; color: #5a6a8a; font-size: 0.7rem;">{tp1_name} • {abs(current_price - tp1):.1f}pt</div>
+                    </div>
+                    <div style="background: rgba(0,230,118,0.08); border-radius: 8px; padding: 12px;">
+                        <div style="font-family: Rajdhani; color: #00e676; font-size: 0.7rem; text-transform:uppercase;">Target 2 (SPX)</div>
+                        <div style="font-family: JetBrains Mono; color: #00e676; font-size: 1.3rem; font-weight:700;">{tp2:.2f}</div>
+                        <div style="font-family: JetBrains Mono; color: #5a6a8a; font-size: 0.7rem;">{tp2_name} • {abs(current_price - tp2):.1f}pt</div>
+                    </div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Execution rules
+            st.markdown(f"""
+            <div style="background: linear-gradient(145deg, #131a2e 0%, #0d1220 100%);
+                        border: 1px solid #1e2d4a; border-radius: 12px; padding: 16px; margin: 10px 0;">
+                <div style="font-family: Orbitron; color: #ffd740; font-size: 0.9rem; margin-bottom: 8px;">
+                    ⏰ EXECUTION RULES
+                </div>
+                <div style="font-family: JetBrains Mono; color: #8892b0; font-size: 0.8rem; line-height: 1.8;">
+                    9:00 AM — DECISION. Read ladder position. Determine bias.<br>
+                    9:05 AM — ENTRY. Let opening IV settle. Buy 3× SPX {strike} {'P' if trade_direction == 'PUT' else 'C'} @ ~${final_premium:.2f}<br>
+                    STOP — Close ALL 3 contracts if SPX {'rises above' if trade_direction == 'PUT' else 'drops below'} {stop_price:.2f} ({stop_line['short'] if stop_line else 'N/A'})<br>
+                    TP1 — Close ALL 3 contracts at SPX {tp1:.2f} ({tp1_name})<br>
+                    TP2 — If TP1 missed, hold for {tp2:.2f} ({tp2_name})<br>
+                    TIME STOP — Close by 11:00 AM CT if trade not working
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        else:
+            # No clear direction
+            st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+            st.markdown("""
+            <div style="background: linear-gradient(145deg, #131a2e 0%, #0d1220 100%);
+                        border: 1px solid #ffd740; border-radius: 12px; padding: 20px; margin: 10px 0; text-align:center;">
+                <div style="font-family: Orbitron; color: #ffd740; font-size: 1.2rem;">
+                    ⏸️ NO TRADE — WAIT FOR CLARITY
+                </div>
+                <div style="font-family: Rajdhani; color: #8892b0; font-size: 1rem; margin-top: 10px;">
+                    Price is between conflicting lines. Wait for a break above or below to establish direction.
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        # ============================================================
+        # CONFLUENCE SCORE
+        # ============================================================
+        st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
         st.markdown("### 🔗 Confluence Score")
         
         col1, col2 = st.columns(2)
@@ -2031,92 +2582,6 @@ def main():
         
         for factor in confluence['factors']:
             st.markdown(f"<span style='font-family: JetBrains Mono; font-size: 0.85rem; color: #8892b0;'>{factor}</span>", unsafe_allow_html=True)
-        
-        st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-        
-        # Options Calculator
-        st.markdown("### 💰 Options Setup")
-        
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            option_type = st.selectbox("Direction", ["PUT (Bearish)", "CALL (Bullish)"])
-        with col2:
-            premium = st.number_input("Premium per contract ($)", value=8.00, step=0.50,
-                                       help="Cost of the ATM 0DTE option")
-        with col3:
-            options_budget = st.number_input("Max risk budget ($)", value=2000, step=100)
-        
-        premium_total = premium * 100  # SPX options are $100 multiplier
-        contracts = int(options_budget / premium_total) if premium_total > 0 else 0
-        
-        # Calculate targets based on lines
-        if "PUT" in option_type and lr_val and lw_val:
-            target_1 = max(lr_val, lw_val)  # first descending line
-            target_2 = min(lr_val, lw_val)  # second descending line
-            target_label = "Descending line targets"
-        elif "CALL" in option_type and hw_val and hb_val:
-            target_1 = min(hw_val, hb_val)
-            target_2 = max(hw_val, hb_val)
-            target_label = "Ascending line targets"
-        else:
-            target_1 = current_price + 10
-            target_2 = current_price + 20
-            target_label = "Default targets"
-        
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-label">Contracts</div>
-                <div class="metric-value-neutral">{contracts}</div>
-                <div class="metric-label" style="font-size:0.7rem;">@ ${premium:.2f} ea (${premium_total:.0f})</div>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        with col2:
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-label">Total Risk</div>
-                <div class="metric-value-bear">${contracts * premium_total:,.0f}</div>
-                <div class="metric-label" style="font-size:0.7rem;">Max loss = premium paid</div>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        with col3:
-            move_to_target = abs(target_1 - current_price)
-            est_profit_1 = contracts * move_to_target * 100  # rough estimate at high delta
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-label">Target 1: {target_1:.2f}</div>
-                <div class="metric-value-bull">~${est_profit_1:,.0f}</div>
-                <div class="metric-label" style="font-size:0.7rem;">{move_to_target:.1f}pt move • Take 1/3</div>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        with col4:
-            move_to_target2 = abs(target_2 - current_price)
-            est_profit_2 = contracts * move_to_target2 * 100
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-label">Target 2: {target_2:.2f}</div>
-                <div class="metric-value-bull">~${est_profit_2:,.0f}</div>
-                <div class="metric-label" style="font-size:0.7rem;">{move_to_target2:.1f}pt move • Take 1/3</div>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        st.markdown(f"""
-        <div class="metric-card" style="margin-top:10px;">
-            <div style="font-family: 'JetBrains Mono'; color: #8892b0; font-size: 0.85rem;">
-                <strong style="color: #ffd740;">⏰ ENTRY:</strong> After 9:05 AM CT (let IV settle)<br>
-                <strong style="color: #ffd740;">⏰ TIME STOP:</strong> Close by 11:00 AM CT if not working<br>
-                <strong style="color: #ffd740;">📏 STRIKE:</strong> ATM {'put' if 'PUT' in option_type else 'call'} — 0DTE expiration<br>
-                <strong style="color: #ffd740;">🔄 SCALING:</strong> If price touches ascending line and rejects, add 50% more contracts<br>
-                <strong style="color: #ffd740;">🚪 EXIT:</strong> Take 1/3 at each target, trail final 1/3 on lowest descending line
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
     
     # ============================================================
     # TAB 4: TRADE LOG
