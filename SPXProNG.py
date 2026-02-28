@@ -5,12 +5,11 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta, time
 import json
-import requests
 
 # ============================================================
 # SPX PROPHET NEXT GEN v1.0
 # Proprietary Market Structure System by David
-# Built on the 0.52 Rate Line Projection Framework
+# Built on the Proprietary Rate Line Projection Framework
 # ============================================================
 
 st.set_page_config(
@@ -167,7 +166,7 @@ st.markdown("""
 # CORE ENGINE: Line Projection Calculator
 # ============================================================
 
-RATE_PER_CANDLE = 0.52
+RATE_PER_CANDLE = 13/25  # Default rate (override via secrets.toml)
 CANDLE_MINUTES = 30
 MAINTENANCE_START_CT = time(16, 0)  # 4:00 PM CT
 MAINTENANCE_END_CT = time(17, 0)    # 5:00 PM CT
@@ -228,7 +227,7 @@ def calculate_line_value(anchor_price: float, anchor_time: datetime,
     """
     Calculate the projected line value at a target time.
     
-    direction: 'ascending' (+0.52/candle) or 'descending' (-0.52/candle)
+    direction: 'ascending' (+rate/candle) or 'descending' (-rate/candle)
     """
     candles = count_candles_between(anchor_time, target_time)
     
@@ -477,7 +476,7 @@ SESSION_TIMES = {
 
 # ============================================================
 # DATA SOURCE MODULE
-# Tastytrade (primary) → yfinance (fallback) → Manual (always available)
+# yfinance (primary for historical) → Tastytrade SDK (live streaming)
 # ============================================================
 
 class DataSourceStatus:
@@ -490,183 +489,128 @@ class DataSourceStatus:
         self.candles = None  # DataFrame with OHLC 30-min candles
 
 
-def fetch_tastytrade_token_from_secrets() -> dict:
-    """Authenticate with Tastytrade using OAuth credentials from st.secrets."""
-    try:
-        tt = st.secrets.get("tastytrade", {})
-        client_id = tt.get("client_id")
-        client_secret = tt.get("client_secret")
-        refresh_token = tt.get("refresh_token")
-        
-        if not all([client_id, client_secret, refresh_token]):
-            return {'ok': False, 'error': "Missing tastytrade secrets (client_id, client_secret, refresh_token)"}
-        
-        # Get access token from refresh token
-        resp = requests.post(
-            "https://api.tastytrade.com/oauth/token",
-            data={
-                "grant_type": "refresh_token",
-                "refresh_token": refresh_token,
-                "client_id": client_id,
-                "client_secret": client_secret,
-            },
-            timeout=15
-        )
-        
-        if resp.status_code == 200:
-            access_token = resp.json().get('access_token', '')
-            if access_token:
-                return {'ok': True, 'token': access_token, 'auth_type': 'oauth'}
-            return {'ok': False, 'error': "No access token in response"}
-        
-        # If OAuth fails, try session login as fallback
-        username = tt.get("username")
-        password = tt.get("password")
-        if username and password:
-            resp2 = requests.post(
-                "https://api.tastytrade.com/sessions",
-                json={"login": username, "password": password, "remember-me": True},
-                timeout=15
-            )
-            if resp2.status_code == 201:
-                token = resp2.json().get('data', {}).get('session-token', '')
-                if token:
-                    return {'ok': True, 'token': token, 'auth_type': 'session'}
-        
-        return {'ok': False, 'error': f"OAuth failed (HTTP {resp.status_code}): {resp.text[:100]}"}
-    except KeyError:
-        return {'ok': False, 'error': "No [tastytrade] section in Streamlit secrets"}
-    except requests.exceptions.ConnectionError:
-        return {'ok': False, 'error': "Cannot reach Tastytrade API"}
-    except Exception as e:
-        return {'ok': False, 'error': str(e)}
-
-
-def fetch_tastytrade_candles(token: str, auth_type: str, symbol: str, 
-                              start_date: str, end_date: str) -> dict:
-    """
-    Fetch 30-min candles from Tastytrade market data API.
-    symbol: e.g. '/ES' for E-mini S&P futures
-    auth_type: 'oauth' or 'session'
-    start_date/end_date: 'YYYY-MM-DD'
-    """
-    try:
-        if auth_type == 'oauth':
-            headers = {"Authorization": f"Bearer {token}"}
-        else:
-            headers = {"Authorization": token}
-        
-        # Tastytrade market data endpoint for futures candles
-        # Try multiple endpoint patterns
-        endpoints = [
-            f"https://api.tastytrade.com/market-data/futures/{symbol}/candles",
-            f"https://api.tastytrade.com/market-data/by-symbol/{symbol}/candles",
-            f"https://api.tastytrade.com/api-quote-tokens",  # may need quote token first
-        ]
-        
-        params = {
-            "resolution": "30min",
-            "start-date": start_date,
-            "end-date": end_date,
-        }
-        
-        last_error = ""
-        for url in endpoints[:2]:  # Try first two endpoints
-            resp = requests.get(url, headers=headers, params=params, timeout=30)
-            
-            if resp.status_code == 200:
-                data = resp.json()
-                candles = data.get('data', {}).get('candles', [])
-                if not candles:
-                    # Try alternate data structure
-                    candles = data.get('data', [])
-                    if isinstance(candles, dict):
-                        candles = candles.get('items', [])
-                
-                if candles:
-                    df = pd.DataFrame(candles)
-                    # Normalize column names
-                    col_map = {}
-                    for col in df.columns:
-                        cl = col.lower().replace('-', '_').replace(' ', '_')
-                        if 'time' in cl or 'date' in cl:
-                            col_map[col] = 'datetime'
-                        elif cl == 'open':
-                            col_map[col] = 'open'
-                        elif cl == 'high':
-                            col_map[col] = 'high'
-                        elif cl == 'low':
-                            col_map[col] = 'low'
-                        elif cl == 'close':
-                            col_map[col] = 'close'
-                        elif cl == 'volume':
-                            col_map[col] = 'volume'
-                    df = df.rename(columns=col_map)
-                    
-                    if 'datetime' in df.columns:
-                        df['datetime'] = pd.to_datetime(df['datetime'])
-                        df = df.sort_values('datetime').reset_index(drop=True)
-                        return {'ok': True, 'data': df}
-            
-            last_error = f"HTTP {resp.status_code}: {resp.text[:200]}"
-        
-        return {'ok': False, 'error': f"All endpoints failed. Last: {last_error}"}
-    except Exception as e:
-        return {'ok': False, 'error': str(e)}
-
-
 def fetch_yfinance_candles(start_date: str, end_date: str) -> dict:
     """
-    Fallback: fetch ES 30-min candles from Yahoo Finance.
+    Fetch ES futures 30-min candles from Yahoo Finance.
+    ES=F gives the full 23-hour session including overnight.
     """
     try:
         import yfinance as yf
         es = yf.Ticker("ES=F")
-        # yfinance needs period or start/end
         df = es.history(start=start_date, end=end_date, interval="30m")
         if len(df) > 0:
             df = df.reset_index()
-            df.columns = [c.lower().replace(' ', '_') for c in df.columns]
-            # Rename 'datetime' or 'date' column
-            if 'datetime' not in df.columns and 'date' in df.columns:
-                df = df.rename(columns={'date': 'datetime'})
-            elif 'datetime' not in df.columns:
+            # Normalize column names
+            col_map = {}
+            for col in df.columns:
+                cl = col.lower().replace(' ', '_')
+                if 'datetime' in cl or 'date' in cl:
+                    col_map[col] = 'datetime'
+                elif cl == 'open':
+                    col_map[col] = 'open'
+                elif cl == 'high':
+                    col_map[col] = 'high'
+                elif cl == 'low':
+                    col_map[col] = 'low'
+                elif cl == 'close':
+                    col_map[col] = 'close'
+                elif cl == 'volume':
+                    col_map[col] = 'volume'
+            df = df.rename(columns=col_map)
+            if 'datetime' not in df.columns:
                 df = df.rename(columns={df.columns[0]: 'datetime'})
             df['datetime'] = pd.to_datetime(df['datetime'])
+            # Convert to CT if timezone-aware
+            if df['datetime'].dt.tz is not None:
+                import pytz
+                ct = pytz.timezone('America/Chicago')
+                df['datetime'] = df['datetime'].dt.tz_convert(ct).dt.tz_localize(None)
             df = df.sort_values('datetime').reset_index(drop=True)
             return {'ok': True, 'data': df}
         return {'ok': False, 'error': 'No data returned from Yahoo Finance'}
     except ImportError:
-        return {'ok': False, 'error': 'yfinance not installed'}
+        return {'ok': False, 'error': 'yfinance not installed (add to requirements.txt)'}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+
+
+def fetch_tastytrade_candles_via_sdk(start_dt: datetime, end_dt: datetime) -> dict:
+    """
+    Fetch historical candles via Tastytrade SDK + DXLink streamer.
+    Uses Candle event with symbol '/ES{=30m}' and from_time parameter.
+    Requires tastytrade SDK with async support.
+    """
+    try:
+        from tastytrade import Session, DXLinkStreamer
+        from tastytrade.dxfeed import Candle
+        import asyncio
+        
+        tt = st.secrets.get("tastytrade", {})
+        client_secret = tt.get("client_secret")
+        refresh_token = tt.get("refresh_token")
+        
+        if not client_secret or not refresh_token:
+            return {'ok': False, 'error': 'Missing tastytrade secrets'}
+        
+        async def _fetch():
+            session = Session(client_secret, refresh_token)
+            candles = []
+            from_time_ms = int(start_dt.timestamp() * 1000)
+            
+            async with DXLinkStreamer(session) as streamer:
+                # Subscribe to 30-min ES candles from start_dt
+                symbol = '/ES{=30m}'
+                await streamer.subscribe_candle(symbol, from_time_ms)
+                
+                # Collect candles until we have enough or timeout
+                import asyncio as aio
+                try:
+                    while True:
+                        candle = await aio.wait_for(streamer.get_event(Candle), timeout=10)
+                        candles.append({
+                            'datetime': datetime.fromtimestamp(candle.time / 1000),
+                            'open': float(candle.open),
+                            'high': float(candle.high),
+                            'low': float(candle.low),
+                            'close': float(candle.close),
+                            'volume': float(candle.volume) if candle.volume else 0,
+                        })
+                except aio.TimeoutError:
+                    pass  # Done collecting
+            
+            return candles
+        
+        # Run async in sync context
+        loop = asyncio.new_event_loop()
+        candles = loop.run_until_complete(_fetch())
+        loop.close()
+        
+        if candles:
+            df = pd.DataFrame(candles)
+            df['datetime'] = pd.to_datetime(df['datetime'])
+            df = df.sort_values('datetime').reset_index(drop=True)
+            # Filter to date range
+            df = df[(df['datetime'] >= start_dt) & (df['datetime'] <= end_dt)]
+            if len(df) > 0:
+                return {'ok': True, 'data': df}
+        return {'ok': False, 'error': 'No candle data received from DXLink'}
+    except ImportError:
+        return {'ok': False, 'error': 'tastytrade SDK not installed'}
     except Exception as e:
         return {'ok': False, 'error': str(e)}
 
 
 def fetch_es_candles(prior_date, next_date) -> DataSourceStatus:
     """
-    Master fetcher: tries Tastytrade (from st.secrets) first, then yfinance, reports status.
-    Returns DataSourceStatus with candles and status info.
+    Master fetcher: tries yfinance first (reliable for historical),
+    then Tastytrade SDK, reports status clearly.
     """
     status = DataSourceStatus()
     
     start_str = prior_date.strftime('%Y-%m-%d')
     end_str = (next_date + timedelta(days=1)).strftime('%Y-%m-%d')
     
-    # Try Tastytrade first (credentials from st.secrets)
-    auth = fetch_tastytrade_token_from_secrets()
-    if auth['ok']:
-        result = fetch_tastytrade_candles(auth['token'], auth['auth_type'], '/ES', start_str, end_str)
-        if result['ok']:
-            status.tastytrade_ok = True
-            status.source_used = "tastytrade"
-            status.candles = result['data']
-            return status
-        else:
-            status.error_msg = f"TT data: {result['error']}"
-    else:
-        status.error_msg = f"TT auth: {auth['error']}"
-    
-    # Fallback to yfinance
+    # Try yfinance first (most reliable for historical 30-min candles)
     result = fetch_yfinance_candles(start_str, end_str)
     if result['ok']:
         status.yfinance_ok = True
@@ -674,7 +618,20 @@ def fetch_es_candles(prior_date, next_date) -> DataSourceStatus:
         status.candles = result['data']
         return status
     
-    status.error_msg += f" | yfinance: {result['error']}"
+    yf_error = result['error']
+    
+    # Fallback: try Tastytrade SDK
+    start_dt = datetime.combine(prior_date, time(8, 30))
+    end_dt = datetime.combine(next_date, time(15, 0))
+    result = fetch_tastytrade_candles_via_sdk(start_dt, end_dt)
+    if result['ok']:
+        status.tastytrade_ok = True
+        status.source_used = "tastytrade"
+        status.candles = result['data']
+        return status
+    
+    tt_error = result['error']
+    status.error_msg = f"yfinance: {yf_error} | Tastytrade: {tt_error}"
     status.source_used = "manual"
     return status
 
@@ -807,7 +764,7 @@ def detect_inflections(ny_candles: pd.DataFrame) -> dict:
 def main():
     # Header
     st.markdown('<div class="main-header">SPX Prophet Next Gen</div>', unsafe_allow_html=True)
-    st.markdown('<div class="sub-header">0.52 Rate Structure Engine • Futures & Options</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sub-header">Structural Rate Engine • Futures & Options</div>', unsafe_allow_html=True)
     
     # ============================================================
     # SIDEBAR: Input Panel
@@ -844,18 +801,7 @@ def main():
         data_status = DataSourceStatus()
         
         if data_mode == "Auto (Tastytrade → yfinance)":
-            # Check if secrets are configured
-            has_secrets = False
-            try:
-                tt = st.secrets.get("tastytrade", {})
-                has_secrets = bool(tt.get("client_id") and tt.get("refresh_token"))
-            except:
-                pass
-            
-            if has_secrets:
-                st.caption("🔑 Tastytrade credentials loaded from secrets")
-            else:
-                st.warning("⚠️ No [tastytrade] section in secrets.toml. Will try yfinance only.")
+            st.caption("📡 Tries yfinance (ES=F) first, then Tastytrade SDK")
             
             fetch_btn = st.button("🔄 Fetch ES Data", use_container_width=True)
             
@@ -870,12 +816,10 @@ def main():
                     data_status = st.session_state.get('last_fetch_status', DataSourceStatus())
                 
                 # Show connection status
-                if data_status.source_used == "tastytrade":
-                    st.success("✅ **Tastytrade** — Connected")
-                elif data_status.source_used == "yfinance":
-                    st.warning("⚠️ **yfinance** — Tastytrade unavailable")
-                    if data_status.error_msg:
-                        st.caption(f"TT: {data_status.error_msg.split('|')[0].strip()}")
+                if data_status.source_used == "yfinance":
+                    st.success("✅ **Yahoo Finance (ES=F)** — Connected")
+                elif data_status.source_used == "tastytrade":
+                    st.success("✅ **Tastytrade DXLink** — Connected")
                 else:
                     st.error("❌ **No data source available**")
                     if data_status.error_msg:
@@ -1042,8 +986,14 @@ def main():
         st.markdown("---")
         st.markdown("### ⚙️ Settings")
         
-        rate = st.number_input("Rate per 30min candle", value=0.52, step=0.01, format="%.2f",
-                               help="The proprietary rate of price movement per candle")
+        # Rate from secrets (keeps your edge private)
+        default_rate = 13/25
+        try:
+            default_rate = float(st.secrets.get("rate", default_rate))
+        except:
+            pass
+        rate = st.number_input("Rate per candle", value=default_rate, step=0.01, format="%.2f",
+                               help="Your proprietary rate (add 'rate' to secrets.toml to persist)")
         
         show_all_lines = st.checkbox("Show all projected lines", value=True)
         show_session_boxes = st.checkbox("Show session boxes", value=True)
