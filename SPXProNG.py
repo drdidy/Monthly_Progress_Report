@@ -996,17 +996,16 @@ def main():
                         
                         if spread_result['ok']:
                             auto_spread = spread_result['spread']
-                            st.caption(f"Auto-detected: ES - SPX = **{auto_spread:+.2f}** (from {spread_result['samples']} matched candles)")
+                            st.caption(f"Auto-detected ES-SPX spread: **{auto_spread:+.2f}** (from {spread_result['samples']} matched candles)")
+                            # Store for the Settings section to pick up as default
+                            if '_es_offset' not in st.session_state or st.session_state.get('_auto_spread_fresh', False):
+                                st.session_state['_es_offset'] = auto_spread
+                                st.session_state['_auto_spread_fresh'] = False
                         else:
-                            auto_spread = 0.0
                             st.caption(f"Could not auto-detect spread: {spread_result['error']}")
                         
-                        es_offset = st.number_input(
-                            "ES - SPX offset", 
-                            value=auto_spread, step=0.25, format="%.2f",
-                            help="Subtracted from ES prices to approximate SPX levels. Positive = ES trades above SPX."
-                        )
-                        st.session_state['_es_offset'] = es_offset
+                        # Use the global offset from Settings
+                        es_offset = st.session_state.get('_es_offset', 0.0)
                         
                         # Apply offset to detected values
                         if es_offset != 0:
@@ -1181,6 +1180,14 @@ def main():
             pass
         rate = st.number_input("Rate per candle", value=default_rate, step=0.01, format="%.2f",
                                help="Your proprietary rate (add 'rate' to secrets.toml to persist)")
+        
+        # Universal ES-SPX offset (always available)
+        # Auto-detected value may have been stored from auto-fetch
+        auto_offset_val = st.session_state.get('_es_offset', 0.0)
+        es_spx_offset = st.number_input("ES - SPX offset", value=auto_offset_val, step=0.25, format="%.2f",
+                                         key="global_es_offset",
+                                         help="NY tab uses SPX (subtracts offset). Asian tab uses ES (adds offset back).")
+        st.session_state['_es_offset'] = es_spx_offset
         
         show_all_lines = st.checkbox("Show all projected lines", value=True)
         show_session_boxes = st.checkbox("Show session boxes", value=True)
@@ -1585,8 +1592,18 @@ def main():
         decision_time_6pm = datetime.combine(overnight_date_tab2, time(18, 0))
         exit_time_7pm = datetime.combine(overnight_date_tab2, time(19, 0))
         
-        # Get the offset to reverse SPX→ES
-        es_offset_asian = st.session_state.get('_es_offset', 0.0)
+        # Get the offset — try widget key first, then session state
+        es_offset_asian = st.session_state.get('global_es_offset', st.session_state.get('_es_offset', 0.0))
+        
+        st.markdown(f"""
+        <div style="background: rgba(255,215,0,0.08); border: 1px solid rgba(255,215,0,0.3); 
+                    border-radius: 8px; padding: 10px; margin: 5px 0; text-align:center;">
+            <span style="font-family: JetBrains Mono; color: #ffd740; font-size: 0.85rem;">
+                📐 ES-SPX Offset: <strong>{es_offset_asian:+.2f}</strong> 
+                {'→ All levels shown in ES terms' if es_offset_asian != 0 else '→ No offset applied (set in sidebar Settings)'}
+            </span>
+        </div>
+        """, unsafe_allow_html=True)
         
         # Build the full line ladder at 6 PM (in ES terms)
         line_ladder_6pm = []
@@ -1634,10 +1651,7 @@ def main():
         # 6 PM LINE LADDER DISPLAY
         # ============================================================
         st.markdown("### 📊 Line Ladder @ 6:00 PM CT")
-        if es_offset_asian != 0:
-            st.caption(f"All values in ES terms (SPX offset of {es_offset_asian:+.2f} added back)")
-        else:
-            st.caption("All projected lines sorted by their value at the decision point")
+        st.caption("All projected lines sorted by 6 PM value — highest to lowest")
         
         if line_ladder_6pm:
             ladder_html = '<div style="font-family: JetBrains Mono; font-size: 0.85rem;">'
