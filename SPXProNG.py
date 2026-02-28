@@ -673,274 +673,131 @@ def main():
         chart_start = datetime.combine(prior_date, time(8, 30))
         chart_end = datetime.combine(next_date, time(15, 0))
         
+        # ============================================================
+        # Build master time axis (sequential indices, no gaps)
+        # ============================================================
+        master_times = []
+        scan_t = chart_start
+        while scan_t <= chart_end:
+            ct_t = scan_t.time()
+            wd_t = scan_t.weekday()
+            skip = (wd_t == 5 or (wd_t == 6 and ct_t < time(17, 0)) or
+                    (wd_t == 4 and ct_t >= time(16, 0)) or
+                    (time(16, 0) <= ct_t < time(17, 0)))
+            if not skip:
+                master_times.append(scan_t)
+            scan_t += timedelta(minutes=CANDLE_MINUTES)
+        time_to_idx = {t: i for i, t in enumerate(master_times)}
+        
+        # Readable x-axis labels at key times only
+        tick_vals, tick_texts, last_date = [], [], None
+        for i, t in enumerate(master_times):
+            if (t.hour, t.minute) in [(8,30),(9,0),(12,0),(15,0),(17,0),(20,0),(0,0),(2,0)]:
+                ts = t.strftime('%I:%M%p').lstrip('0').lower()
+                if last_date != t.date():
+                    tick_texts.append(f"{t.strftime('%b %d')}\n{ts}")
+                    last_date = t.date()
+                else:
+                    tick_texts.append(ts)
+                tick_vals.append(i)
+        
         fig = go.Figure()
         
-        # Add session boxes if enabled
+        # Session boxes using candle indices
         if show_session_boxes:
-            # We'll add sessions for the overnight and next day
-            sessions_to_draw = []
+            prior_wd_chart = prior_date.weekday() if hasattr(prior_date, 'weekday') else datetime.combine(prior_date, time(0,0)).weekday()
+            is_friday_chart = prior_wd_chart == 4
+            overnight_chart = (next_date - timedelta(days=1)) if is_friday_chart else prior_date
             
-            # Determine if this is a Friday-to-Monday scenario
-            prior_weekday = prior_date.weekday() if hasattr(prior_date, 'weekday') else datetime.combine(prior_date, time(0,0)).weekday()
-            is_friday = prior_weekday == 4  # Friday = 4
-            
-            # Globex open date: normally prior_date evening, but Sunday for Friday
-            if is_friday:
-                # Friday: market closes at 4pm, reopens Sunday 5pm
-                globex_date = next_date - timedelta(days=1)  # Sunday
-            else:
-                globex_date = prior_date if hasattr(prior_date, 'year') else datetime.combine(prior_date, time(0,0))
-                if not isinstance(globex_date, datetime):
-                    globex_date = datetime.combine(globex_date, time(0,0))
-                globex_date = prior_date
-            
-            # Prior day NY session
-            sessions_to_draw.append({
-                'name': 'New York',
-                'start': datetime.combine(prior_date, time(8, 30)),
-                'end': datetime.combine(prior_date, time(15, 0)),
-                'color': SESSION_TIMES['New York']['color'],
-                'border': SESSION_TIMES['New York']['border']
-            })
-            
-            if not is_friday:
-                # Normal weekday: show maintenance and overnight sessions
-                # Maintenance
-                sessions_to_draw.append({
-                    'name': 'Maintenance',
-                    'start': datetime.combine(prior_date, time(16, 0)),
-                    'end': datetime.combine(prior_date, time(17, 0)),
-                    'color': 'rgba(100,100,100,0.1)',
-                    'border': 'rgba(100,100,100,0.3)'
-                })
-                
-                # Sydney (overnight)
-                sessions_to_draw.append({
-                    'name': 'Sydney',
-                    'start': datetime.combine(prior_date, time(17, 0)),
-                    'end': datetime.combine(prior_date, time(19, 0)),
-                    'color': SESSION_TIMES['Sydney']['color'],
-                    'border': SESSION_TIMES['Sydney']['border']
-                })
-                
-                # Tokyo
-                sessions_to_draw.append({
-                    'name': 'Tokyo',
-                    'start': datetime.combine(prior_date, time(19, 0)),
-                    'end': datetime.combine(next_date, time(2, 0)),
-                    'color': SESSION_TIMES['Tokyo']['color'],
-                    'border': SESSION_TIMES['Tokyo']['border']
-                })
-            else:
-                # Friday: show weekend closure then Sunday evening sessions
-                # Weekend closure box
-                sessions_to_draw.append({
-                    'name': 'WEEKEND CLOSED',
-                    'start': datetime.combine(prior_date, time(16, 0)),
-                    'end': datetime.combine(next_date - timedelta(days=1), time(17, 0)),
-                    'color': 'rgba(100,100,100,0.05)',
-                    'border': 'rgba(100,100,100,0.2)'
-                })
-                
-                # Sunday evening globex open
-                sun_date = next_date - timedelta(days=1)
-                sessions_to_draw.append({
-                    'name': 'Globex Open (Sunday)',
-                    'start': datetime.combine(sun_date, time(17, 0)),
-                    'end': datetime.combine(sun_date, time(19, 0)),
-                    'color': SESSION_TIMES['Sydney']['color'],
-                    'border': SESSION_TIMES['Sydney']['border']
-                })
-                
-                # Tokyo (Sunday evening)
-                sessions_to_draw.append({
-                    'name': 'Tokyo',
-                    'start': datetime.combine(sun_date, time(19, 0)),
-                    'end': datetime.combine(next_date, time(2, 0)),
-                    'color': SESSION_TIMES['Tokyo']['color'],
-                    'border': SESSION_TIMES['Tokyo']['border']
-                })
-            
-            # London
-            sessions_to_draw.append({
-                'name': 'London',
-                'start': datetime.combine(next_date, time(2, 0)),
-                'end': datetime.combine(next_date, time(8, 30)),
-                'color': SESSION_TIMES['London']['color'],
-                'border': SESSION_TIMES['London']['border']
-            })
-            
-            # Next day NY
-            sessions_to_draw.append({
-                'name': 'New York',
-                'start': datetime.combine(next_date, time(8, 30)),
-                'end': datetime.combine(next_date, time(15, 0)),
-                'color': SESSION_TIMES['New York']['color'],
-                'border': SESSION_TIMES['New York']['border']
-            })
-            
-            for session in sessions_to_draw:
-                fig.add_vrect(
-                    x0=session['start'], x1=session['end'],
-                    fillcolor=session['color'],
-                    line=dict(color=session['border'], width=1, dash='dot'),
-                )
-                # Add session label as separate annotation
-                mid_time = session['start'] + (session['end'] - session['start']) / 2
-                fig.add_annotation(
-                    x=session['start'], y=1, yref="paper",
-                    text=session['name'], showarrow=False,
-                    font=dict(size=10, color=session['border']),
-                    xanchor="left", yshift=10
-                )
+            session_defs = [
+                ('New York', prior_date, time(8,30), prior_date, time(15,0), 'rgba(66,133,244,0.08)', 'rgba(66,133,244,0.3)'),
+                ('Globex', overnight_chart, time(17,0), overnight_chart, time(19,0), 'rgba(255,215,0,0.05)', 'rgba(255,215,0,0.2)'),
+                ('Tokyo', overnight_chart, time(19,0), next_date, time(2,0), 'rgba(233,30,99,0.05)', 'rgba(233,30,99,0.2)'),
+                ('London', next_date, time(2,0), next_date, time(8,30), 'rgba(0,188,212,0.05)', 'rgba(0,188,212,0.2)'),
+                ('New York', next_date, time(8,30), next_date, time(15,0), 'rgba(66,133,244,0.08)', 'rgba(66,133,244,0.3)'),
+            ]
+            for sname, sd1, st1, sd2, st2, sfill, sborder in session_defs:
+                s_start = datetime.combine(sd1, st1)
+                s_end = datetime.combine(sd2, st2)
+                s_idx = [time_to_idx[t] for t in master_times if s_start <= t <= s_end and t in time_to_idx]
+                if s_idx:
+                    fig.add_vrect(x0=min(s_idx), x1=max(s_idx), fillcolor=sfill,
+                        line=dict(color=sborder, width=1, dash='dot'))
+                    fig.add_annotation(x=min(s_idx), y=1, yref="paper", text=sname,
+                        showarrow=False, font=dict(size=10, color=sborder), xanchor="left", yshift=10)
         
-        # Add 9:00 AM vertical decision line
+        
+        # 9:00 AM decision line
         nine_am = datetime.combine(next_date, time(9, 0))
         nine_am_ts = nine_am.timestamp() * 1000
-        fig.add_shape(
-            type="line", x0=nine_am, x1=nine_am, y0=0, y1=1,
-            yref="paper", line=dict(color="#ffd740", width=2, dash="dash")
-        )
-        fig.add_annotation(
-            x=nine_am, y=1, yref="paper",
-            text="9:00 AM Decision", showarrow=False,
-            font=dict(color="#ffd740", size=11),
-            yshift=10
-        )
+        if nine_am in time_to_idx:
+            idx9 = time_to_idx[nine_am]
+            fig.add_shape(type="line", x0=idx9, x1=idx9, y0=0, y1=1, yref="paper",
+                line=dict(color="#ffd740", width=2, dash="dash"))
+            fig.add_annotation(x=idx9, y=1, yref="paper", text="9:00 AM Decision",
+                showarrow=False, font=dict(color="#ffd740", size=11), yshift=10)
         
-        # Plot ascending lines (red)
-        for i, asc_line in enumerate(levels['ascending']):
-            series = generate_line_series(
-                asc_line['anchor_price'], asc_line['anchor_time'],
-                chart_start, chart_end, 'ascending'
-            )
-            if series:
-                times, prices = zip(*series)
+        for li, asc_line in enumerate(levels['ascending']):
+            series = generate_line_series(asc_line['anchor_price'], asc_line['anchor_time'], chart_start, chart_end, 'ascending')
+            xi = [time_to_idx[t] for t, _ in series if t in time_to_idx]
+            yi = [p for t, p in series if t in time_to_idx]
+            if xi:
                 is_wick = asc_line['type'] == 'highest_wick'
-                fig.add_trace(go.Scatter(
-                    x=list(times), y=list(prices),
-                    mode='lines',
-                    name=f"↗ {'HW' if is_wick else f'B{i+1}'}: {asc_line['anchor_price']:.1f}",
-                    line=dict(
-                        color='#ff1744' if is_wick else '#ff5252',
-                        width=3 if is_wick else 2,
-                        dash='solid' if is_wick else 'dash'
-                    ),
-                    opacity=1.0 if is_wick or show_all_lines else 0.4
-                ))
+                fig.add_trace(go.Scatter(x=xi, y=yi, mode='lines',
+                    name=f"↗ {'HW' if is_wick else f'B{li+1}'}: {asc_line['anchor_price']:.1f}",
+                    line=dict(color='#ff1744' if is_wick else '#ff5252', width=3 if is_wick else 2, dash='solid' if is_wick else 'dash'),
+                    opacity=1.0 if is_wick or show_all_lines else 0.4))
         
-        # Plot descending lines (green)
-        for i, desc_line in enumerate(levels['descending']):
-            series = generate_line_series(
-                desc_line['anchor_price'], desc_line['anchor_time'],
-                chart_start, chart_end, 'descending'
-            )
-            if series:
-                times, prices = zip(*series)
+        for li, desc_line in enumerate(levels['descending']):
+            series = generate_line_series(desc_line['anchor_price'], desc_line['anchor_time'], chart_start, chart_end, 'descending')
+            xi = [time_to_idx[t] for t, _ in series if t in time_to_idx]
+            yi = [p for t, p in series if t in time_to_idx]
+            if xi:
                 is_wick = desc_line['type'] == 'lowest_wick'
-                fig.add_trace(go.Scatter(
-                    x=list(times), y=list(prices),
-                    mode='lines',
-                    name=f"↘ {'LW' if is_wick else f'R{i+1}'}: {desc_line['anchor_price']:.1f}",
-                    line=dict(
-                        color='#00e676' if is_wick else '#69f0ae',
-                        width=3 if is_wick else 2,
-                        dash='solid' if is_wick else 'dash'
-                    ),
-                    opacity=1.0 if is_wick or show_all_lines else 0.4
-                ))
+                fig.add_trace(go.Scatter(x=xi, y=yi, mode='lines',
+                    name=f"↘ {'LW' if is_wick else f'R{li+1}'}: {desc_line['anchor_price']:.1f}",
+                    line=dict(color='#00e676' if is_wick else '#69f0ae', width=3 if is_wick else 2, dash='solid' if is_wick else 'dash'),
+                    opacity=1.0 if is_wick or show_all_lines else 0.4))
         
-        # Add horizontal 9 AM levels
         key = levels['key_levels']
-        level_configs = [
+        for level, color, label in [
             (key['highest_wick_ascending'], '#ff1744', 'HW Asc @ 9AM'),
             (key['highest_bounce_ascending'], '#ff5252', 'HB Asc @ 9AM'),
             (key['lowest_rejection_descending'], '#69f0ae', 'LR Desc @ 9AM'),
             (key['lowest_wick_descending'], '#00e676', 'LW Desc @ 9AM'),
-        ]
-        
-        for level, color, label in level_configs:
+        ]:
             if level:
-                fig.add_shape(
-                    type="line", x0=0, x1=1, xref="paper",
+                fig.add_shape(type="line", x0=0, x1=len(master_times)-1,
                     y0=level['value_at_9am'], y1=level['value_at_9am'],
-                    line=dict(color=color, width=1, dash="dot")
-                )
-                fig.add_annotation(
-                    x=1, xref="paper", y=level['value_at_9am'],
+                    line=dict(color=color, width=1, dash="dot"))
+                fig.add_annotation(x=len(master_times)-1, y=level['value_at_9am'],
                     text=f"{label}: {level['value_at_9am']:.2f}",
-                    showarrow=False, font=dict(size=9, color=color),
-                    xshift=5, xanchor="left"
-                )
+                    showarrow=False, font=dict(size=9, color=color), xshift=5, xanchor="left")
         
-        # Add anchor point markers
         for bounce in bounces:
-            fig.add_trace(go.Scatter(
-                x=[bounce['time']], y=[bounce['price']],
-                mode='markers',
-                marker=dict(symbol='triangle-up', size=14, color='#ff5252',
-                           line=dict(width=2, color='white')),
-                name=f"Bounce: {bounce['price']:.1f}",
-                showlegend=False
-            ))
-        
+            if bounce['time'] in time_to_idx:
+                fig.add_trace(go.Scatter(x=[time_to_idx[bounce['time']]], y=[bounce['price']],
+                    mode='markers', marker=dict(symbol='triangle-up', size=14, color='#ff5252', line=dict(width=2, color='white')), showlegend=False))
         for rejection in rejections:
-            fig.add_trace(go.Scatter(
-                x=[rejection['time']], y=[rejection['price']],
-                mode='markers',
-                marker=dict(symbol='triangle-down', size=14, color='#69f0ae',
-                           line=dict(width=2, color='white')),
-                name=f"Rejection: {rejection['price']:.1f}",
-                showlegend=False
-            ))
+            if rejection['time'] in time_to_idx:
+                fig.add_trace(go.Scatter(x=[time_to_idx[rejection['time']]], y=[rejection['price']],
+                    mode='markers', marker=dict(symbol='triangle-down', size=14, color='#69f0ae', line=dict(width=2, color='white')), showlegend=False))
+        if highest_wick['time'] in time_to_idx:
+            fig.add_trace(go.Scatter(x=[time_to_idx[highest_wick['time']]], y=[highest_wick['price']],
+                mode='markers', marker=dict(symbol='diamond', size=14, color='#ff1744', line=dict(width=2, color='white')), showlegend=False))
+        if lowest_wick['time'] in time_to_idx:
+            fig.add_trace(go.Scatter(x=[time_to_idx[lowest_wick['time']]], y=[lowest_wick['price']],
+                mode='markers', marker=dict(symbol='diamond', size=14, color='#00e676', line=dict(width=2, color='white')), showlegend=False))
         
-        # Highest/lowest wick markers
-        fig.add_trace(go.Scatter(
-            x=[highest_wick['time']], y=[highest_wick['price']],
-            mode='markers',
-            marker=dict(symbol='diamond', size=14, color='#ff1744',
-                       line=dict(width=2, color='white')),
-            name=f"Highest Wick: {highest_wick['price']:.1f}",
-            showlegend=False
-        ))
-        
-        fig.add_trace(go.Scatter(
-            x=[lowest_wick['time']], y=[lowest_wick['price']],
-            mode='markers',
-            marker=dict(symbol='diamond', size=14, color='#00e676',
-                       line=dict(width=2, color='white')),
-            name=f"Lowest Wick: {lowest_wick['price']:.1f}",
-            showlegend=False
-        ))
-        
-        # Chart styling
         fig.update_layout(
-            template='plotly_dark',
-            paper_bgcolor='#0a0a0f',
-            plot_bgcolor='#0d1117',
-            height=700,
-            margin=dict(l=60, r=200, t=40, b=60),
-            xaxis=dict(
-                gridcolor='#1a2332',
-                showgrid=True,
-                tickformat='%b %d\n%I:%M %p',
-                dtick=3600000 * 2,  # 2 hour ticks
-            ),
-            yaxis=dict(
-                gridcolor='#1a2332',
-                showgrid=True,
-                tickformat='.2f',
-                side='right',
-            ),
-            legend=dict(
-                bgcolor='rgba(13,18,32,0.9)',
-                bordercolor='#1e2d4a',
-                borderwidth=1,
-                font=dict(size=10, family='JetBrains Mono'),
-                x=1.01, y=1,
-            ),
-            font=dict(family='JetBrains Mono', color='#8892b0'),
-            hovermode='x unified',
+            template='plotly_dark', paper_bgcolor='#0a0a0f', plot_bgcolor='#0d1117',
+            height=700, margin=dict(l=60, r=200, t=40, b=100),
+            xaxis=dict(gridcolor='#1a2332', showgrid=True, tickmode='array',
+                tickvals=tick_vals, ticktext=tick_texts, tickangle=-45, tickfont=dict(size=9)),
+            yaxis=dict(gridcolor='#1a2332', showgrid=True, tickformat='.2f', side='right'),
+            legend=dict(bgcolor='rgba(13,18,32,0.9)', bordercolor='#1e2d4a', borderwidth=1,
+                font=dict(size=10, family='JetBrains Mono'), x=1.01, y=1),
+            font=dict(family='JetBrains Mono', color='#8892b0'), hovermode='x unified',
         )
         
         st.plotly_chart(fig, use_container_width=True)
