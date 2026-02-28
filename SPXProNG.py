@@ -711,13 +711,14 @@ def apply_offset(items: list, offset: float) -> list:
 def filter_ny_session(df: pd.DataFrame, session_date) -> pd.DataFrame:
     """
     Filter candles to only the NY regular session: 8:30 AM - 3:00 PM CT.
-    Assumes datetime column is in the DataFrame.
+    Uses a flexible window to catch candles even if timestamps are slightly off.
     """
-    session_start = datetime.combine(session_date, time(8, 30))
-    session_end = datetime.combine(session_date, time(15, 0))
+    session_start = datetime.combine(session_date, time(8, 0))   # slightly early to catch 8:30
+    session_end = datetime.combine(session_date, time(15, 30))    # slightly late to catch 3:00
     
     mask = (df['datetime'] >= session_start) & (df['datetime'] <= session_end)
-    return df[mask].copy().reset_index(drop=True)
+    filtered = df[mask].copy().reset_index(drop=True)
+    return filtered
 
 
 def detect_inflections(ny_candles: pd.DataFrame) -> dict:
@@ -726,17 +727,23 @@ def detect_inflections(ny_candles: pd.DataFrame) -> dict:
     
     Uses LINE CHART logic: closing prices only for bounces/rejections.
     
-    Bounce = trough: close[i] < close[i-1] AND close[i] < close[i+1]
-      (price dipped and reversed up)
+    Bounce = trough: close[i] <= close[i-1] AND close[i] < close[i+1]
+      OR close[i] < close[i-1] AND close[i] <= close[i+1]
+      (handles flat bottoms)
     
-    Rejection = peak: close[i] > close[i-1] AND close[i] > close[i+1]
-      (price pushed up and reversed down)
+    Rejection = peak: close[i] >= close[i-1] AND close[i] > close[i+1]
+      OR close[i] > close[i-1] AND close[i] >= close[i+1]
+      (handles flat tops)
+    
+    For multi-candle patterns (W-bottoms, M-tops), uses a 5-candle window:
+      If close[i] is the lowest/highest within a 5-candle window centered on it,
+      it's also detected as a bounce/rejection.
     
     Highest Wick = highest HIGH of a BEARISH candle (close < open)
-      - Exclude if the first bearish candle is at 8:30 AM
+      - Exclude the 8:30 AM candle (opening noise)
     
     Lowest Wick = lowest LOW of a BULLISH candle (close > open)
-      - Exclude if the first bullish candle is at 8:30 AM
+      - Exclude the 8:30 AM candle (opening noise)
     """
     if len(ny_candles) < 3:
         return {'bounces': [], 'rejections': [], 'highest_wick': None, 'lowest_wick': None}
@@ -746,74 +753,103 @@ def detect_inflections(ny_candles: pd.DataFrame) -> dict:
     opens = ny_candles['open'].values
     highs = ny_candles['high'].values
     lows = ny_candles['low'].values
+    n = len(closes)
     
     bounces = []
     rejections = []
+    bounce_times = set()
+    rejection_times = set()
     
-    # Detect bounces and rejections from closing prices (line chart)
-    for i in range(1, len(closes) - 1):
+    # Pass 1: Standard 3-candle pattern (with <= to catch flat edges)
+    for i in range(1, n - 1):
         t = pd.Timestamp(times[i]).to_pydatetime()
         
-        # Bounce: local trough in closing prices
-        if closes[i] < closes[i-1] and closes[i] < closes[i+1]:
+        # Bounce: local trough
+        is_bounce = (
+            (closes[i] < closes[i-1] and closes[i] < closes[i+1]) or
+            (closes[i] <= closes[i-1] and closes[i] < closes[i+1] and closes[i] < closes[max(0,i-2)] if i >= 2 else False) or
+            (closes[i] < closes[i-1] and closes[i] <= closes[i+1] and closes[i] < closes[min(n-1,i+2)] if i < n-2 else False)
+        )
+        
+        if is_bounce:
+            bounces.append({'price': float(closes[i]), 'time': t})
+            bounce_times.add(i)
+        
+        # Rejection: local peak
+        is_rejection = (
+            (closes[i] > closes[i-1] and closes[i] > closes[i+1]) or
+            (closes[i] >= closes[i-1] and closes[i] > closes[i+1] and closes[i] > closes[max(0,i-2)] if i >= 2 else False) or
+            (closes[i] > closes[i-1] and closes[i] >= closes[i+1] and closes[i] > closes[min(n-1,i+2)] if i < n-2 else False)
+        )
+        
+        if is_rejection:
+            rejections.append({'price': float(closes[i]), 'time': t})
+            rejection_times.add(i)
+    
+    # Pass 2: 5-candle window for broader patterns (W-bottom, M-top)
+    for i in range(2, n - 2):
+        if i in bounce_times or i in rejection_times:
+            continue
+        
+        t = pd.Timestamp(times[i]).to_pydatetime()
+        window = closes[i-2:i+3]
+        
+        # Bounce: lowest in 5-candle window
+        if closes[i] == window.min() and closes[i] < closes[i-2] and closes[i] < closes[i+2]:
             bounces.append({'price': float(closes[i]), 'time': t})
         
-        # Rejection: local peak in closing prices
-        if closes[i] > closes[i-1] and closes[i] > closes[i+1]:
+        # Rejection: highest in 5-candle window
+        if closes[i] == window.max() and closes[i] > closes[i-2] and closes[i] > closes[i+2]:
             rejections.append({'price': float(closes[i]), 'time': t})
     
-    # Highest wick: highest HIGH of a BEARISH candle (close < open)
-    # Exclude if the first bearish candle is at 8:30 AM
-    bearish_mask = closes < opens
-    first_bearish_idx = None
-    for idx in range(len(bearish_mask)):
-        if bearish_mask[idx]:
-            first_bearish_idx = idx
-            break
+    # Sort by time
+    bounces.sort(key=lambda x: x['time'])
+    rejections.sort(key=lambda x: x['time'])
     
+    # Highest wick: highest HIGH of a BEARISH candle (close < open)
+    # Exclude candles at 8:30 AM (opening noise)
+    bearish_mask = closes < opens
     highest_wick = None
     if bearish_mask.any():
-        bearish_candles = ny_candles[bearish_mask].copy()
+        best_high = -1
+        best_idx = None
+        for idx in range(n):
+            if not bearish_mask[idx]:
+                continue
+            t = pd.Timestamp(times[idx]).to_pydatetime()
+            if t.hour == 8 and t.minute <= 30:
+                continue  # Skip 8:00-8:30 AM candles
+            if highs[idx] > best_high:
+                best_high = highs[idx]
+                best_idx = idx
         
-        # Exclude the first bearish candle if it's 8:30 AM
-        if first_bearish_idx is not None:
-            first_bearish_time = pd.Timestamp(times[first_bearish_idx]).to_pydatetime()
-            if first_bearish_time.hour == 8 and first_bearish_time.minute == 30:
-                bearish_candles = bearish_candles.iloc[1:] if len(bearish_candles) > 1 else bearish_candles.iloc[0:0]
-        
-        if len(bearish_candles) > 0:
-            hw_idx = bearish_candles['high'].idxmax()
-            hw_row = ny_candles.loc[hw_idx]
+        if best_idx is not None:
             highest_wick = {
-                'price': float(hw_row['high']),
-                'time': pd.Timestamp(hw_row['datetime']).to_pydatetime()
+                'price': float(highs[best_idx]),
+                'time': pd.Timestamp(times[best_idx]).to_pydatetime()
             }
     
     # Lowest wick: lowest LOW of a BULLISH candle (close > open)
-    # Exclude if the first bullish candle is at 8:30 AM
+    # Exclude candles at 8:30 AM (opening noise)
     bullish_mask = closes > opens
-    first_bullish_idx = None
-    for idx in range(len(bullish_mask)):
-        if bullish_mask[idx]:
-            first_bullish_idx = idx
-            break
-    
     lowest_wick = None
     if bullish_mask.any():
-        bullish_candles = ny_candles[bullish_mask].copy()
+        best_low = float('inf')
+        best_idx = None
+        for idx in range(n):
+            if not bullish_mask[idx]:
+                continue
+            t = pd.Timestamp(times[idx]).to_pydatetime()
+            if t.hour == 8 and t.minute <= 30:
+                continue  # Skip 8:00-8:30 AM candles
+            if lows[idx] < best_low:
+                best_low = lows[idx]
+                best_idx = idx
         
-        # Exclude the first bullish candle if it's 8:30 AM
-        if first_bullish_idx is not None:
-            first_bullish_time = pd.Timestamp(times[first_bullish_idx]).to_pydatetime()
-            if first_bullish_time.hour == 8 and first_bullish_time.minute == 30:
-                bullish_candles = bullish_candles.iloc[1:] if len(bullish_candles) > 1 else bullish_candles.iloc[0:0]
-        
-        if len(bullish_candles) > 0:
-            lw_idx = bullish_candles['low'].idxmin()
-            lw_row = ny_candles.loc[lw_idx]
+        if best_idx is not None:
             lowest_wick = {
-                'price': float(lw_row['low']),
-                'time': pd.Timestamp(lw_row['datetime']).to_pydatetime()
+                'price': float(lows[best_idx]),
+                'time': pd.Timestamp(times[best_idx]).to_pydatetime()
             }
     
     return {
@@ -899,6 +935,15 @@ def main():
                     
                     if len(ny_candles) >= 3:
                         detected = detect_inflections(ny_candles)
+                        
+                        # Debug: show raw candle data
+                        with st.expander(f"🔬 Raw NY Candles ({len(ny_candles)} bars)", expanded=False):
+                            debug_df = ny_candles[['datetime', 'open', 'high', 'low', 'close']].copy()
+                            debug_df['datetime'] = debug_df['datetime'].dt.strftime('%I:%M %p')
+                            debug_df = debug_df.rename(columns={'datetime': 'Time'})
+                            for col in ['open', 'high', 'low', 'close']:
+                                debug_df[col] = debug_df[col].map(lambda x: f"{x:.2f}")
+                            st.dataframe(debug_df, use_container_width=True, hide_index=True)
                         
                         # Calculate ES-SPX spread
                         st.markdown("---")
