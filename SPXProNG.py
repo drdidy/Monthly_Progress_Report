@@ -3958,9 +3958,11 @@ def main():
                     chart_start = overnight_start
                     chart_end = three_pm_bt
                     
-                    bt_levels = build_structural_levels(
-                        bt_highest_wick, bt_lowest_wick, bt_bounces, bt_rejections,
-                        chart_start, chart_end
+                    # next_day_date needs to be a datetime for the function
+                    bt_next_day_dt = datetime.combine(bt_date, time(0, 0))
+                    bt_levels = calculate_nine_am_levels(
+                        bt_bounces, bt_rejections, bt_highest_wick, bt_lowest_wick,
+                        bt_next_day_dt
                     )
                     
                     # ── Build chart with actual price overlay ──
