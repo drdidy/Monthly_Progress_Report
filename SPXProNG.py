@@ -3965,217 +3965,25 @@ def main():
                         bt_next_day_dt
                     )
                     
-                    # ── Build chart with actual price overlay ──
+                    # ── BACKTEST RESULTS — Scorecard Format ──
                     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-                    st.markdown("### 📊 Structural Lines vs Actual Price")
-                    
-                    # Generate a continuous 30-min timeline from overnight_start to three_pm
-                    bt_times = []
-                    cursor = overnight_start
-                    while cursor <= three_pm_bt:
-                        bt_times.append(cursor)
-                        cursor += timedelta(minutes=30)
-                    bt_time_to_idx = {t: i for i, t in enumerate(bt_times)}
-                    
-                    # Map candle data to the timeline indices
-                    candle_close_map = {}
-                    candle_high_map = {}
-                    candle_low_map = {}
-                    for _, row in full_day_spx.iterrows():
-                        ct = row['Datetime']
-                        # Find closest timeline slot
-                        best_t = min(bt_times, key=lambda t: abs((t - ct).total_seconds()))
-                        candle_close_map[best_t] = row['Close']
-                        candle_high_map[best_t] = row['High']
-                        candle_low_map[best_t] = row['Low']
-                    
-                    # Build price series aligned to timeline
-                    price_x = []
-                    price_y = []
-                    for t in bt_times:
-                        if t in candle_close_map:
-                            price_x.append(bt_time_to_idx[t])
-                            price_y.append(candle_close_map[t])
-                    
-                    # Calculate Y-axis range from actual data
-                    all_prices = list(candle_high_map.values()) + list(candle_low_map.values())
-                    if all_prices:
-                        y_min = min(all_prices) - 5
-                        y_max = max(all_prices) + 5
-                    else:
-                        y_min, y_max = 6800, 6950
-                    
-                    # Tick marks
-                    bt_tick_vals = []
-                    bt_tick_texts = []
-                    for t in bt_times:
-                        h, m = t.hour, t.minute
-                        if m == 0 and h in [15, 17, 19, 21, 23, 1, 3, 5, 7, 8, 9, 10, 11, 12, 13, 14]:
-                            bt_tick_vals.append(bt_time_to_idx[t])
-                            if h == 9:
-                                bt_tick_texts.append("9AM ▶")
-                            elif h >= 12:
-                                bt_tick_texts.append(f"{h-12 if h > 12 else 12}{'PM' if h < 24 else 'AM'}")
-                            else:
-                                bt_tick_texts.append(f"{h}AM" if h > 0 else "12AM")
-                    
-                    bt_fig = go.Figure()
-                    
-                    # ── Actual price line ──
-                    bt_fig.add_trace(go.Scatter(
-                        x=price_x,
-                        y=price_y,
-                        mode='lines',
-                        name='Actual Price',
-                        line=dict(color='rgba(255,255,255,0.8)', width=2.5),
-                        hovertemplate='Price: %{y:.2f}<extra></extra>',
-                    ))
-                    
-                    # ── 9 AM decision line ──
-                    if nine_am_bt in bt_time_to_idx:
-                        idx9 = bt_time_to_idx[nine_am_bt]
-                        bt_fig.add_shape(type="line", x0=idx9, x1=idx9, y0=0, y1=1, yref="paper",
-                            line=dict(color="#ffd740", width=2, dash="dash"))
-                        bt_fig.add_annotation(x=idx9, y=1.05, yref="paper",
-                            text="<b>9:00 AM DECISION</b>", showarrow=False,
-                            font=dict(color="#ffd740", size=11, family="Orbitron"))
-                    
-                    # ── Ascending structural lines ──
-                    for li, asc_line in enumerate(bt_levels['ascending']):
-                        series = generate_line_series(asc_line['anchor_price'], asc_line['anchor_time'], chart_start, chart_end, 'ascending')
-                        xi = [bt_time_to_idx[t] for t, _ in series if t in bt_time_to_idx]
-                        yi = [p for t, p in series if t in bt_time_to_idx]
-                        if xi:
-                            is_wick = asc_line['type'] == 'highest_wick'
-                            line_color = '#ff1744' if is_wick else '#ff5252'
-                            bt_fig.add_trace(go.Scatter(x=xi, y=yi, mode='lines',
-                                name=f"↗ {'HW' if is_wick else f'B{li+1}'}: {asc_line['anchor_price']:.1f}",
-                                line=dict(color=line_color, width=3 if is_wick else 2, dash='solid' if is_wick else 'dash'),
-                                opacity=0.9 if is_wick else 0.5))
-                    
-                    # ── Descending structural lines ──
-                    for li, desc_line in enumerate(bt_levels['descending']):
-                        series = generate_line_series(desc_line['anchor_price'], desc_line['anchor_time'], chart_start, chart_end, 'descending')
-                        xi = [bt_time_to_idx[t] for t, _ in series if t in bt_time_to_idx]
-                        yi = [p for t, p in series if t in bt_time_to_idx]
-                        if xi:
-                            is_wick = desc_line['type'] == 'lowest_wick'
-                            line_color = '#00e676' if is_wick else '#69f0ae'
-                            bt_fig.add_trace(go.Scatter(x=xi, y=yi, mode='lines',
-                                name=f"↘ {'LW' if is_wick else f'R{li+1}'}: {desc_line['anchor_price']:.1f}",
-                                line=dict(color=line_color, width=3 if is_wick else 2, dash='solid' if is_wick else 'dash'),
-                                opacity=0.9 if is_wick else 0.5))
-                    
-                    # ── 9 AM key level horizontals ──
-                    bt_key = bt_levels['key_levels']
-                    for level, color, label, icon in [
-                        (bt_key['highest_wick_ascending'], '#ff1744', 'HW', '▲'),
-                        (bt_key['highest_bounce_ascending'], '#ff5252', 'HB', '△'),
-                        (bt_key['lowest_rejection_descending'], '#69f0ae', 'LR', '▽'),
-                        (bt_key['lowest_wick_descending'], '#00e676', 'LW', '▼'),
-                    ]:
-                        if level:
-                            bt_fig.add_shape(type="line", x0=0, x1=len(bt_times)-1,
-                                y0=level['value_at_9am'], y1=level['value_at_9am'],
-                                line=dict(color=color, width=1, dash="dot"))
-                            bt_fig.add_annotation(x=len(bt_times)-1, y=level['value_at_9am'],
-                                text=f"<b>{icon} {label}</b> {level['value_at_9am']:.2f}",
-                                showarrow=False, font=dict(size=10, color=color, family='JetBrains Mono'),
-                                xshift=8, xanchor="left",
-                                bgcolor='rgba(6,9,16,0.8)', bordercolor=color, borderwidth=1, borderpad=3)
-                    
-                    # ── Bounce / Rejection markers ──
-                    for b in bt_bounces:
-                        if b['time'] in bt_time_to_idx:
-                            bt_fig.add_trace(go.Scatter(
-                                x=[bt_time_to_idx[b['time']]], y=[b['price']],
-                                mode='markers', showlegend=False,
-                                marker=dict(symbol='triangle-up', size=14, color='#ff5252',
-                                    line=dict(width=1.5, color='rgba(255,82,82,0.5)')),
-                                hovertemplate=f"<b>BOUNCE</b><br>{b['price']:.2f}<extra></extra>"
-                            ))
-                    for r in bt_rejections:
-                        if r['time'] in bt_time_to_idx:
-                            bt_fig.add_trace(go.Scatter(
-                                x=[bt_time_to_idx[r['time']]], y=[r['price']],
-                                mode='markers', showlegend=False,
-                                marker=dict(symbol='triangle-down', size=14, color='#69f0ae',
-                                    line=dict(width=1.5, color='rgba(105,240,174,0.5)')),
-                                hovertemplate=f"<b>REJECTION</b><br>{r['price']:.2f}<extra></extra>"
-                            ))
-                    
-                    # ── Wick markers ──
-                    if bt_highest_wick['time'] in bt_time_to_idx:
-                        bt_fig.add_trace(go.Scatter(
-                            x=[bt_time_to_idx[bt_highest_wick['time']]], y=[bt_highest_wick['price']],
-                            mode='markers', showlegend=False,
-                            marker=dict(symbol='diamond', size=16, color='#ff1744',
-                                line=dict(width=2, color='rgba(255,23,68,0.6)')),
-                            hovertemplate=f"<b>HIGHEST WICK</b><br>{bt_highest_wick['price']:.2f}<extra></extra>"
-                        ))
-                    if bt_lowest_wick['time'] in bt_time_to_idx:
-                        bt_fig.add_trace(go.Scatter(
-                            x=[bt_time_to_idx[bt_lowest_wick['time']]], y=[bt_lowest_wick['price']],
-                            mode='markers', showlegend=False,
-                            marker=dict(symbol='diamond', size=16, color='#00e676',
-                                line=dict(width=2, color='rgba(0,230,118,0.6)')),
-                            hovertemplate=f"<b>LOWEST WICK</b><br>{bt_lowest_wick['price']:.2f}<extra></extra>"
-                        ))
-                    
-                    # ── Chart layout ──
-                    bt_fig.update_layout(
-                        template='plotly_dark',
-                        paper_bgcolor='rgba(5,8,16,1)',
-                        plot_bgcolor='rgba(8,13,22,1)',
-                        height=750,
-                        margin=dict(l=10, r=200, t=50, b=60),
-                        title=dict(text=f"<b>Backtest: {bt_date.strftime('%A, %B %d, %Y')}</b>",
-                            font=dict(family='Orbitron', size=16, color='#ccd6f6'), x=0.5),
-                        xaxis=dict(
-                            gridcolor='rgba(30,45,74,0.15)', showgrid=True,
-                            tickmode='array', tickvals=bt_tick_vals, ticktext=bt_tick_texts,
-                            tickfont=dict(size=11, family='Rajdhani', color='#3a4a6a'),
-                            spikemode='across', spikethickness=1, spikecolor='rgba(0,212,255,0.3)',
-                            spikesnap='cursor', spikedash='dot',
-                        ),
-                        yaxis=dict(
-                            gridcolor='rgba(30,45,74,0.12)', showgrid=True,
-                            tickformat='.2f', side='right',
-                            range=[y_min, y_max],
-                            tickfont=dict(family='JetBrains Mono', size=11, color='#5a6a8a'),
-                            spikemode='across', spikethickness=1, spikecolor='rgba(0,212,255,0.3)',
-                            spikesnap='cursor', spikedash='dot',
-                        ),
-                        legend=dict(bgcolor='rgba(6,9,16,0.95)', bordercolor='rgba(30,45,74,0.4)', borderwidth=1,
-                            font=dict(size=10, family='JetBrains Mono', color='#8892b0'), x=1.01, y=1),
-                        font=dict(family='JetBrains Mono', color='#8892b0'),
-                        hovermode='x unified',
-                        hoverlabel=dict(bgcolor='rgba(6,9,16,0.95)', bordercolor='rgba(0,212,255,0.2)',
-                            font=dict(family='JetBrains Mono', size=11, color='#ccd6f6')),
-                        dragmode='pan',
-                    )
-                    
-                    st.plotly_chart(bt_fig, use_container_width=True, config={
-                        'displayModeBar': True, 'displaylogo': False, 'scrollZoom': True,
-                        'modeBarButtonsToRemove': ['autoScale2d', 'lasso2d', 'select2d'],
-                    })
-                    
-                    # ── Backtest Analysis ──
-                    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-                    st.markdown("### 📋 Backtest Analysis")
                     
                     # Get 9AM price
                     nine_am_candles = full_day_spx[full_day_spx['Datetime'] == nine_am_bt]
                     if len(nine_am_candles) > 0:
                         bt_9am_price = nine_am_candles.iloc[0]['Open']
                     else:
-                        # Closest candle to 9 AM
                         closest = full_day_spx.iloc[(full_day_spx['Datetime'] - nine_am_bt).abs().argsort()[:1]]
                         bt_9am_price = closest.iloc[0]['Close'] if len(closest) > 0 else 0
                     
                     # Get session high/low after 9 AM
                     rth_mask = full_day_spx['Datetime'] >= nine_am_bt
                     rth_candles = full_day_spx[rth_mask]
+                    
+                    # Get pre-9AM data too
+                    pre_9_mask = full_day_spx['Datetime'] < nine_am_bt
+                    pre_9_candles = full_day_spx[pre_9_mask]
+                    
                     if len(rth_candles) > 0:
                         rth_high = rth_candles['High'].max()
                         rth_low = rth_candles['Low'].min()
@@ -4183,65 +3991,222 @@ def main():
                         session_move = rth_close - bt_9am_price
                         session_range = rth_high - rth_low
                         
-                        # Check which lines were hit
-                        lines_hit = []
-                        for level_name, level_data in [
-                            ('HW Ascending', bt_key['highest_wick_ascending']),
-                            ('HB Ascending', bt_key['highest_bounce_ascending']),
-                            ('LR Descending', bt_key['lowest_rejection_descending']),
-                            ('LW Descending', bt_key['lowest_wick_descending']),
+                        overnight_high = pre_9_candles['High'].max() if len(pre_9_candles) > 0 else bt_9am_price
+                        overnight_low = pre_9_candles['Low'].min() if len(pre_9_candles) > 0 else bt_9am_price
+                        
+                        # Direction
+                        day_direction = "BULLISH" if session_move > 2 else ("BEARISH" if session_move < -2 else "FLAT")
+                        day_color = "#00e676" if session_move > 2 else ("#ff1744" if session_move < -2 else "#ffd740")
+                        day_icon = "📈" if session_move > 2 else ("📉" if session_move < -2 else "😐")
+                        
+                        # ── Key Levels at 9 AM ──
+                        bt_key = bt_levels['key_levels']
+                        key_level_data = []
+                        for level_name, level_data, color, direction in [
+                            ('HW ↗ (Highest Wick Ascending)', bt_key['highest_wick_ascending'], '#ff1744', 'resistance'),
+                            ('HB ↗ (Highest Bounce Ascending)', bt_key['highest_bounce_ascending'], '#ff5252', 'resistance'),
+                            ('LR ↘ (Lowest Rejection Descending)', bt_key['lowest_rejection_descending'], '#69f0ae', 'support'),
+                            ('LW ↘ (Lowest Wick Descending)', bt_key['lowest_wick_descending'], '#00e676', 'support'),
                         ]:
                             if level_data:
                                 val = level_data['value_at_9am']
-                                if rth_low <= val <= rth_high:
-                                    lines_hit.append((level_name, val))
+                                touched = rth_low <= val <= rth_high
+                                dist = val - bt_9am_price
+                                key_level_data.append({
+                                    'name': level_name, 'value': val, 'color': color,
+                                    'touched': touched, 'dist': dist, 'direction': direction
+                                })
                         
-                        # Direction that day
-                        day_direction = "BULLISH" if session_move > 2 else ("BEARISH" if session_move < -2 else "FLAT")
-                        day_color = "#00e676" if session_move > 2 else ("#ff1744" if session_move < -2 else "#ffd740")
+                        # ── Determine what the system would have signaled ──
+                        resistance_levels = [l for l in key_level_data if l['direction'] == 'resistance' and l['dist'] > 0]
+                        support_levels = [l for l in key_level_data if l['direction'] == 'support' and l['dist'] < 0]
+                        
+                        nearest_resistance = min(resistance_levels, key=lambda x: x['dist']) if resistance_levels else None
+                        nearest_support = max(support_levels, key=lambda x: x['dist']) if support_levels else None
+                        
+                        # System signal: if more ascending above = bearish (PUT), if more descending below = bullish (CALL)
+                        asc_above = len([l for l in key_level_data if l['direction'] == 'resistance' and l['dist'] > 0])
+                        desc_below = len([l for l in key_level_data if l['direction'] == 'support' and l['dist'] < 0])
+                        
+                        if asc_above > desc_below:
+                            system_signal = "PUT (Bearish)"
+                            signal_color = "#ff1744"
+                            signal_correct = session_move < -2
+                        elif desc_below > asc_above:
+                            system_signal = "CALL (Bullish)"
+                            signal_color = "#00e676"
+                            signal_correct = session_move > 2
+                        else:
+                            system_signal = "NEUTRAL"
+                            signal_color = "#ffd740"
+                            signal_correct = abs(session_move) <= 2
+                        
+                        verdict_text = "✅ CORRECT" if signal_correct else "❌ WRONG"
+                        verdict_color = "#00e676" if signal_correct else "#ff1744"
+                        
+                        # ══════════════════════════════════════════════════
+                        # RENDER THE SCORECARD
+                        # ══════════════════════════════════════════════════
+                        
+                        st.markdown(f"""
+                        <div class="metric-card" style="text-align:center; border: 1px solid {verdict_color}40;">
+                            <div style="font-family: Orbitron, monospace; color: #3a4a6a; font-size: 0.7rem; letter-spacing: 3px; margin-bottom: 8px;">
+                                BACKTEST VERDICT
+                            </div>
+                            <div style="font-family: Orbitron, monospace; color: {verdict_color}; font-size: 2rem; letter-spacing: 2px;">
+                                {verdict_text}
+                            </div>
+                            <div style="font-family: Rajdhani, sans-serif; color: #8892b0; font-size: 1rem; margin-top: 6px;">
+                                System said <span style="color:{signal_color}; font-weight:700;">{system_signal}</span>
+                                &nbsp;→&nbsp; Market went <span style="color:{day_color}; font-weight:700;">{day_icon} {day_direction} ({session_move:+.1f}pt)</span>
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                        # ── Session Summary Cards ──
+                        st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
                         
                         acol1, acol2, acol3, acol4 = st.columns(4)
                         with acol1:
                             st.markdown(f"""
                             <div class="metric-card">
-                                <div class="metric-label">9 AM Price</div>
+                                <div class="metric-label">9 AM SPX Price</div>
                                 <div style="font-family: Orbitron; color: #00d4ff; font-size: 1.3rem;">{bt_9am_price:.2f}</div>
                             </div>""", unsafe_allow_html=True)
                         with acol2:
                             st.markdown(f"""
                             <div class="metric-card">
-                                <div class="metric-label">Day Direction</div>
-                                <div style="font-family: Orbitron; color: {day_color}; font-size: 1.3rem;">{day_direction}</div>
-                                <div style="font-family: JetBrains Mono; color: #3a4a6a; font-size: 0.75rem;">{session_move:+.1f}pt</div>
+                                <div class="metric-label">RTH Close</div>
+                                <div style="font-family: Orbitron; color: {day_color}; font-size: 1.3rem;">{rth_close:.2f}</div>
+                                <div style="font-family: JetBrains Mono; color: #3a4a6a; font-size: 0.75rem;">{session_move:+.1f}pt from open</div>
                             </div>""", unsafe_allow_html=True)
                         with acol3:
                             st.markdown(f"""
                             <div class="metric-card">
                                 <div class="metric-label">RTH Range</div>
                                 <div style="font-family: Orbitron; color: #ccd6f6; font-size: 1.3rem;">{session_range:.1f}pt</div>
-                                <div style="font-family: JetBrains Mono; color: #3a4a6a; font-size: 0.75rem;">H:{rth_high:.0f} L:{rth_low:.0f}</div>
+                                <div style="font-family: JetBrains Mono; color: #3a4a6a; font-size: 0.75rem;">H: {rth_high:.0f} &nbsp; L: {rth_low:.0f}</div>
                             </div>""", unsafe_allow_html=True)
                         with acol4:
                             st.markdown(f"""
                             <div class="metric-card">
-                                <div class="metric-label">Lines Hit</div>
-                                <div style="font-family: Orbitron; color: {'#00e676' if lines_hit else '#ff5252'}; font-size: 1.3rem;">{len(lines_hit)}/4</div>
+                                <div class="metric-label">Overnight Range</div>
+                                <div style="font-family: Orbitron; color: #ffd740; font-size: 1.3rem;">{overnight_high - overnight_low:.1f}pt</div>
+                                <div style="font-family: JetBrains Mono; color: #3a4a6a; font-size: 0.75rem;">H: {overnight_high:.0f} &nbsp; L: {overnight_low:.0f}</div>
                             </div>""", unsafe_allow_html=True)
                         
-                        if lines_hit:
-                            st.markdown("**Lines touched during RTH:**")
-                            for name, val in lines_hit:
-                                st.markdown(f"""
-                                <div style="display:flex; align-items:center; gap: 10px; padding: 6px 12px; margin: 2px 0;
-                                            background: rgba(0,230,118,0.05); border-radius: 8px; border-left: 3px solid #00e676;">
-                                    <span style="font-family: Orbitron, monospace; color: #00e676; font-size: 0.85rem;">✅ {name}</span>
-                                    <span style="font-family: JetBrains Mono, monospace; color: #8892b0; font-size: 0.8rem;">@ {val:.2f}</span>
+                        # ── Key Levels Scorecard ──
+                        st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+                        st.markdown("### 🎯 Key Levels at 9:00 AM — Did Price Respect Them?")
+                        
+                        lines_hit = sum(1 for l in key_level_data if l['touched'])
+                        total_lines = len(key_level_data)
+                        
+                        for level in key_level_data:
+                            if level['touched']:
+                                status_icon = "✅ HIT"
+                                status_color = "#00e676"
+                                bg = "rgba(0,230,118,0.04)"
+                                border = "#00e676"
+                            else:
+                                status_icon = "❌ MISSED"
+                                status_color = "#ff5252"
+                                bg = "rgba(255,82,82,0.03)"
+                                border = "#ff5252"
+                            
+                            dist_text = f"{level['dist']:+.1f}pt from 9AM price"
+                            
+                            st.markdown(f"""
+                            <div style="display:flex; align-items:center; justify-content:space-between; padding: 10px 16px; margin: 4px 0;
+                                        background: {bg}; border-radius: 10px; border-left: 3px solid {border};">
+                                <div style="flex: 2;">
+                                    <span style="font-family: Rajdhani, sans-serif; color: {level['color']}; font-weight: 600; font-size: 0.95rem;">{level['name']}</span>
                                 </div>
-                                """, unsafe_allow_html=True)
-                        else:
-                            st.markdown("""
-                            <div style="padding: 8px 14px; background: rgba(255,23,68,0.05); border-radius: 8px; border-left: 3px solid #ff1744;">
-                                <span style="font-family: Rajdhani, sans-serif; color: #ff5252;">No key levels were hit during RTH. Price stayed in a narrow band.</span>
+                                <div style="flex: 1; text-align:center;">
+                                    <span style="font-family: JetBrains Mono, monospace; color: #ccd6f6; font-size: 1rem;">{level['value']:.2f}</span>
+                                    <br><span style="font-family: JetBrains Mono; color: #3a4a6a; font-size: 0.7rem;">{dist_text}</span>
+                                </div>
+                                <div style="flex: 1; text-align:right;">
+                                    <span style="font-family: Orbitron, monospace; color: {status_color}; font-size: 0.85rem; letter-spacing: 1px;">{status_icon}</span>
+                                </div>
+                            </div>
+                            """, unsafe_allow_html=True)
+                        
+                        st.markdown(f"""
+                        <div style="text-align:center; padding: 12px; margin-top: 8px;">
+                            <span style="font-family: Orbitron, monospace; color: {'#00e676' if lines_hit >= 2 else '#ffd740' if lines_hit == 1 else '#ff5252'}; 
+                                        font-size: 1.1rem; letter-spacing: 2px;">
+                                {lines_hit}/{total_lines} KEY LEVELS TOUCHED
+                            </span>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                        # ── Trade Simulation ──
+                        if nearest_resistance and nearest_support:
+                            st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+                            st.markdown("### 💰 What Would the Trade Have Been?")
+                            
+                            if system_signal.startswith("PUT"):
+                                entry_level = nearest_resistance
+                                stop_val = entry_level['value'] + 2.0
+                                tp1_val = bt_9am_price
+                                tp2_val = nearest_support['value']
+                                # Check if entry was reached
+                                entry_reached = rth_high >= entry_level['value']
+                                stop_hit = rth_high >= stop_val if entry_reached else False
+                                tp1_hit = rth_low <= tp1_val if entry_reached else False
+                                tp2_hit = rth_low <= tp2_val if entry_reached else False
+                            else:
+                                entry_level = nearest_support
+                                stop_val = entry_level['value'] - 2.0
+                                tp1_val = bt_9am_price
+                                tp2_val = nearest_resistance['value']
+                                entry_reached = rth_low <= entry_level['value']
+                                stop_hit = rth_low <= stop_val if entry_reached else False
+                                tp1_hit = rth_high >= tp1_val if entry_reached else False
+                                tp2_hit = rth_high >= tp2_val if entry_reached else False
+                            
+                            if not entry_reached:
+                                trade_result = "NO FILL — Price never reached entry"
+                                trade_color = "#ffd740"
+                                trade_pnl = "$0"
+                            elif stop_hit and not tp1_hit:
+                                trade_result = "STOPPED OUT"
+                                trade_color = "#ff1744"
+                                trade_pnl = f"-${2.0 * 100 * 3:,.0f}"
+                            elif tp2_hit:
+                                pnl = abs(tp2_val - entry_level['value']) * 100 * 3
+                                trade_result = "HIT TP2 — Full target"
+                                trade_color = "#00e676"
+                                trade_pnl = f"+${pnl:,.0f}"
+                            elif tp1_hit:
+                                pnl = abs(tp1_val - entry_level['value']) * 100 * 3
+                                trade_result = "HIT TP1 — Partial profit"
+                                trade_color = "#00e676"
+                                trade_pnl = f"+${pnl:,.0f}"
+                            else:
+                                trade_result = "TIME STOP — Closed at session end"
+                                trade_color = "#ffd740"
+                                close_pnl = abs(rth_close - entry_level['value']) * 100 * 3
+                                direction_mult = -1 if system_signal.startswith("PUT") else 1
+                                actual_move = direction_mult * (rth_close - entry_level['value'])
+                                trade_pnl = f"{'+'if actual_move > 0 else ''}{actual_move * 100 * 3:,.0f}"
+                            
+                            st.markdown(f"""
+                            <div class="metric-card" style="border: 1px solid {trade_color}30;">
+                                <div style="display:flex; justify-content:space-between; align-items:center;">
+                                    <div>
+                                        <div style="font-family: Rajdhani; color: #8892b0; font-size: 0.85rem;">Signal: <span style="color:{signal_color}; font-weight:700;">{system_signal}</span></div>
+                                        <div style="font-family: JetBrains Mono; color: #ccd6f6; font-size: 0.85rem; margin-top: 6px;">
+                                            Entry: {entry_level['value']:.2f} &nbsp;|&nbsp; Stop: {stop_val:.2f} &nbsp;|&nbsp; TP1: {tp1_val:.2f} &nbsp;|&nbsp; TP2: {tp2_val:.2f}
+                                        </div>
+                                    </div>
+                                    <div style="text-align:right;">
+                                        <div style="font-family: Orbitron; color: {trade_color}; font-size: 1.3rem;">{trade_result}</div>
+                                        <div style="font-family: Orbitron; color: {trade_color}; font-size: 1.1rem; margin-top: 4px;">{trade_pnl}</div>
+                                        <div style="font-family: JetBrains Mono; color: #3a4a6a; font-size: 0.7rem;">3× SPX contracts</div>
+                                    </div>
+                                </div>
                             </div>
                             """, unsafe_allow_html=True)
                     
