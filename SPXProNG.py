@@ -2262,49 +2262,6 @@ def main():
                         font=dict(size=10, color='rgba(255,255,255,0.3)', family='JetBrains Mono'),
                     )
             
-            # ── Overnight high/low markers ──
-            fig.add_trace(go.Scatter(
-                x=[1], y=[highest_wick['price']],
-                mode='markers',
-                marker=dict(symbol='diamond', size=14, color='#ff1744',
-                    line=dict(width=2, color='rgba(255,23,68,0.4)')),
-                showlegend=False,
-                hovertemplate=f"<b>OVERNIGHT HIGH</b><br>{highest_wick['price']:.2f}<br>{highest_wick['time'].strftime('%I:%M %p')}<extra></extra>",
-            ))
-            fig.add_trace(go.Scatter(
-                x=[1], y=[lowest_wick['price']],
-                mode='markers',
-                marker=dict(symbol='diamond', size=14, color='#00e676',
-                    line=dict(width=2, color='rgba(0,230,118,0.4)')),
-                showlegend=False,
-                hovertemplate=f"<b>OVERNIGHT LOW</b><br>{lowest_wick['price']:.2f}<br>{lowest_wick['time'].strftime('%I:%M %p')}<extra></extra>",
-            ))
-            
-            # ── Bounce/Rejection dot markers on the left ──
-            for bi, bounce in enumerate(bounces):
-                y_pos = bounce['price']
-                # Offset x slightly so dots don't overlap
-                x_pos = 2.0 + (bi % 4) * 0.5
-                fig.add_trace(go.Scatter(
-                    x=[x_pos], y=[y_pos],
-                    mode='markers',
-                    marker=dict(symbol='triangle-up', size=10, color='#ff5252',
-                        line=dict(width=1, color='rgba(255,82,82,0.3)')),
-                    showlegend=False,
-                    hovertemplate=f"<b>BOUNCE</b><br>{y_pos:.2f}<br>{bounce['time'].strftime('%I:%M %p')}<extra></extra>",
-                ))
-            for ri, rejection in enumerate(rejections):
-                y_pos = rejection['price']
-                x_pos = 2.0 + (ri % 4) * 0.5
-                fig.add_trace(go.Scatter(
-                    x=[x_pos], y=[y_pos],
-                    mode='markers',
-                    marker=dict(symbol='triangle-down', size=10, color='#69f0ae',
-                        line=dict(width=1, color='rgba(105,240,174,0.3)')),
-                    showlegend=False,
-                    hovertemplate=f"<b>REJECTION</b><br>{y_pos:.2f}<br>{rejection['time'].strftime('%I:%M %p')}<extra></extra>",
-                ))
-        
         # ── Chart layout — clean thermometer style ──
         fig.update_layout(
             template='plotly_dark',
@@ -4086,14 +4043,7 @@ def main():
                         key_level_data = full_ladder
                         
                         # ── Determine what the system would have signaled ──
-                        resistance_levels = [l for l in key_level_data if l['direction'] == 'resistance' and l['dist'] > 0]
-                        support_levels = [l for l in key_level_data if l['direction'] == 'support' and l['dist'] < 0]
-                        
-                        nearest_resistance = min(resistance_levels, key=lambda x: x['dist']) if resistance_levels else None
-                        nearest_support = max(support_levels, key=lambda x: x['dist']) if support_levels else None
-                        
-                        # ── Replicate the EXACT NY tab signal logic ──
-                        # Build a mini ladder from all structural lines at 9 AM (not just key 4)
+                        # Build a mini ladder from all structural lines at 9 AM
                         bt_ny_ladder = []
                         for line in bt_levels['ascending']:
                             bt_ny_ladder.append({'value': line['value_at_9am'], 'direction': 'ascending'})
