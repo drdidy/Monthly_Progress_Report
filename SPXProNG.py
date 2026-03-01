@@ -873,6 +873,22 @@ def auto_detect_confluence(ny_trade_direction: str, ny_ladder: list,
     
     try:
         df = candles_df.copy()
+        # Normalize column names (yfinance returns lowercase)
+        norm_map = {}
+        for col in df.columns:
+            cl = col.lower().strip()
+            if cl == 'datetime':
+                norm_map[col] = 'Datetime'
+            elif cl == 'open':
+                norm_map[col] = 'Open'
+            elif cl == 'high':
+                norm_map[col] = 'High'
+            elif cl == 'low':
+                norm_map[col] = 'Low'
+            elif cl == 'close':
+                norm_map[col] = 'Close'
+        df = df.rename(columns=norm_map)
+        
         # Ensure datetime index
         if 'Datetime' in df.columns:
             df['Datetime'] = pd.to_datetime(df['Datetime'])
@@ -3828,6 +3844,24 @@ def main():
                     st.success(f"Loaded {len(bt_status.candles)} candles via {bt_status.source_used}")
                     
                     bt_candles = bt_status.candles.copy()
+                    
+                    # ── Normalize column names (yfinance returns lowercase) ──
+                    col_map = {}
+                    for col in bt_candles.columns:
+                        cl = col.lower().strip()
+                        if cl == 'datetime':
+                            col_map[col] = 'Datetime'
+                        elif cl == 'open':
+                            col_map[col] = 'Open'
+                        elif cl == 'high':
+                            col_map[col] = 'High'
+                        elif cl == 'low':
+                            col_map[col] = 'Low'
+                        elif cl == 'close':
+                            col_map[col] = 'Close'
+                        elif cl == 'volume':
+                            col_map[col] = 'Volume'
+                    bt_candles = bt_candles.rename(columns=col_map)
                     
                     # ── Filter overnight session: prior day 3PM to bt_date 9AM ──
                     bt_candles['Datetime'] = pd.to_datetime(bt_candles['Datetime'])
