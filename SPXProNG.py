@@ -4024,22 +4024,67 @@ def main():
                         nearest_resistance = min(resistance_levels, key=lambda x: x['dist']) if resistance_levels else None
                         nearest_support = max(support_levels, key=lambda x: x['dist']) if support_levels else None
                         
-                        # System signal: if more ascending above = bearish (PUT), if more descending below = bullish (CALL)
-                        asc_above = len([l for l in key_level_data if l['direction'] == 'resistance' and l['dist'] > 0])
-                        desc_below = len([l for l in key_level_data if l['direction'] == 'support' and l['dist'] < 0])
+                        # ── Replicate the EXACT NY tab signal logic ──
+                        # Build a mini ladder from all structural lines at 9 AM (not just key 4)
+                        bt_ny_ladder = []
+                        for line in bt_levels['ascending']:
+                            bt_ny_ladder.append({'value': line['value_at_9am'], 'direction': 'ascending'})
+                        for line in bt_levels['descending']:
+                            bt_ny_ladder.append({'value': line['value_at_9am'], 'direction': 'descending'})
                         
-                        if asc_above > desc_below:
+                        bt_lines_above = [l for l in bt_ny_ladder if l['value'] > bt_9am_price]
+                        bt_lines_below = [l for l in bt_ny_ladder if l['value'] <= bt_9am_price]
+                        bt_nearest_above = min(bt_lines_above, key=lambda x: x['value']) if bt_lines_above else None
+                        bt_nearest_below = max(bt_lines_below, key=lambda x: x['value']) if bt_lines_below else None
+                        
+                        all_asc_values = [l['value'] for l in bt_ny_ladder if l['direction'] == 'ascending']
+                        all_desc_values = [l['value'] for l in bt_ny_ladder if l['direction'] == 'descending']
+                        
+                        system_signal = "NEUTRAL"
+                        signal_color = "#ffd740"
+                        signal_detail = ""
+                        
+                        if all_asc_values and bt_9am_price < min(all_asc_values):
+                            # Below ALL ascending = bearish
                             system_signal = "PUT (Bearish)"
                             signal_color = "#ff1744"
-                            signal_correct = session_move < -2
-                        elif desc_below > asc_above:
+                            signal_detail = f"Price below ALL ascending lines (min asc: {min(all_asc_values):.0f})"
+                        elif all_desc_values and bt_9am_price > max(all_desc_values) and all_asc_values and bt_9am_price > max(all_asc_values):
+                            # Above ALL lines = strong bullish
                             system_signal = "CALL (Bullish)"
                             signal_color = "#00e676"
+                            signal_detail = f"Price ABOVE all lines — strong trend"
+                        elif all_desc_values and bt_9am_price < min(all_desc_values):
+                            # Below ALL lines = strong bearish
+                            system_signal = "PUT (Bearish)"
+                            signal_color = "#ff1744"
+                            signal_detail = f"Price BELOW all lines — strong downtrend"
+                        elif all_asc_values and bt_9am_price > max(all_asc_values):
+                            # Above all ascending = bullish
+                            system_signal = "CALL (Bullish)"
+                            signal_color = "#00e676"
+                            signal_detail = f"Price above ALL ascending lines (max asc: {max(all_asc_values):.0f})"
+                        elif bt_nearest_above and bt_nearest_below:
+                            if bt_nearest_above['direction'] == 'ascending' and bt_nearest_below['direction'] == 'descending':
+                                system_signal = "NEUTRAL (Between Asc ↗ & Desc ↘)"
+                                signal_color = "#ffd740"
+                                signal_detail = "Price between ascending above and descending below — no clear bias"
+                            elif bt_nearest_above['direction'] == 'descending':
+                                system_signal = "PUT (Bearish Lean)"
+                                signal_color = "#ff1744"
+                                signal_detail = f"Descending resistance at {bt_nearest_above['value']:.0f} above"
+                            elif bt_nearest_below['direction'] == 'ascending':
+                                system_signal = "CALL (Bullish Lean)"
+                                signal_color = "#00e676"
+                                signal_detail = f"Ascending support at {bt_nearest_below['value']:.0f} below"
+                        
+                        # Evaluate correctness
+                        if system_signal.startswith("PUT"):
+                            signal_correct = session_move < -2
+                        elif system_signal.startswith("CALL"):
                             signal_correct = session_move > 2
                         else:
-                            system_signal = "NEUTRAL"
-                            signal_color = "#ffd740"
-                            signal_correct = abs(session_move) <= 2
+                            signal_correct = abs(session_move) <= 5  # NEUTRAL is "correct" if flat-ish
                         
                         verdict_text = "✅ CORRECT" if signal_correct else "❌ WRONG"
                         verdict_color = "#00e676" if signal_correct else "#ff1744"
@@ -4059,6 +4104,9 @@ def main():
                             <div style="font-family: Rajdhani, sans-serif; color: #8892b0; font-size: 1rem; margin-top: 6px;">
                                 System said <span style="color:{signal_color}; font-weight:700;">{system_signal}</span>
                                 &nbsp;→&nbsp; Market went <span style="color:{day_color}; font-weight:700;">{day_icon} {day_direction} ({session_move:+.1f}pt)</span>
+                            </div>
+                            <div style="font-family: JetBrains Mono, monospace; color: #3a4a6a; font-size: 0.75rem; margin-top: 6px;">
+                                {signal_detail}
                             </div>
                         </div>
                         """, unsafe_allow_html=True)
@@ -4142,29 +4190,39 @@ def main():
                         """, unsafe_allow_html=True)
                         
                         # ── Trade Simulation ──
-                        if nearest_resistance and nearest_support:
+                        if bt_nearest_above and bt_nearest_below:
                             st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
                             st.markdown("### 💰 What Would the Trade Have Been?")
                             
                             if system_signal.startswith("PUT"):
-                                entry_level = nearest_resistance
-                                stop_val = entry_level['value'] + 2.0
+                                # PUT: entry at nearest line above (resistance), stop above that, targets below
+                                entry_val = bt_nearest_above['value']
+                                stop_val = entry_val + 2.0
                                 tp1_val = bt_9am_price
-                                tp2_val = nearest_support['value']
-                                # Check if entry was reached
-                                entry_reached = rth_high >= entry_level['value']
+                                tp2_val = bt_nearest_below['value']
+                                entry_reached = rth_high >= entry_val
                                 stop_hit = rth_high >= stop_val if entry_reached else False
                                 tp1_hit = rth_low <= tp1_val if entry_reached else False
                                 tp2_hit = rth_low <= tp2_val if entry_reached else False
-                            else:
-                                entry_level = nearest_support
-                                stop_val = entry_level['value'] - 2.0
+                            elif system_signal.startswith("CALL"):
+                                # CALL: entry at nearest line below (support), stop below that, targets above
+                                entry_val = bt_nearest_below['value']
+                                stop_val = entry_val - 2.0
                                 tp1_val = bt_9am_price
-                                tp2_val = nearest_resistance['value']
-                                entry_reached = rth_low <= entry_level['value']
+                                tp2_val = bt_nearest_above['value']
+                                entry_reached = rth_low <= entry_val
                                 stop_hit = rth_low <= stop_val if entry_reached else False
                                 tp1_hit = rth_high >= tp1_val if entry_reached else False
                                 tp2_hit = rth_high >= tp2_val if entry_reached else False
+                            else:
+                                entry_val = bt_9am_price
+                                stop_val = entry_val
+                                tp1_val = entry_val
+                                tp2_val = entry_val
+                                entry_reached = False
+                                stop_hit = False
+                                tp1_hit = False
+                                tp2_hit = False
                             
                             if not entry_reached:
                                 trade_result = "NO FILL — Price never reached entry"
@@ -4175,21 +4233,21 @@ def main():
                                 trade_color = "#ff1744"
                                 trade_pnl = f"-${2.0 * 100 * 3:,.0f}"
                             elif tp2_hit:
-                                pnl = abs(tp2_val - entry_level['value']) * 100 * 3
+                                pnl = abs(tp2_val - entry_val) * 100 * 3
                                 trade_result = "HIT TP2 — Full target"
                                 trade_color = "#00e676"
                                 trade_pnl = f"+${pnl:,.0f}"
                             elif tp1_hit:
-                                pnl = abs(tp1_val - entry_level['value']) * 100 * 3
+                                pnl = abs(tp1_val - entry_val) * 100 * 3
                                 trade_result = "HIT TP1 — Partial profit"
                                 trade_color = "#00e676"
                                 trade_pnl = f"+${pnl:,.0f}"
                             else:
                                 trade_result = "TIME STOP — Closed at session end"
                                 trade_color = "#ffd740"
-                                close_pnl = abs(rth_close - entry_level['value']) * 100 * 3
+                                close_pnl = abs(rth_close - entry_val) * 100 * 3
                                 direction_mult = -1 if system_signal.startswith("PUT") else 1
-                                actual_move = direction_mult * (rth_close - entry_level['value'])
+                                actual_move = direction_mult * (rth_close - entry_val)
                                 trade_pnl = f"{'+'if actual_move > 0 else ''}{actual_move * 100 * 3:,.0f}"
                             
                             st.markdown(f"""
@@ -4198,7 +4256,7 @@ def main():
                                     <div>
                                         <div style="font-family: Rajdhani; color: #8892b0; font-size: 0.85rem;">Signal: <span style="color:{signal_color}; font-weight:700;">{system_signal}</span></div>
                                         <div style="font-family: JetBrains Mono; color: #ccd6f6; font-size: 0.85rem; margin-top: 6px;">
-                                            Entry: {entry_level['value']:.2f} &nbsp;|&nbsp; Stop: {stop_val:.2f} &nbsp;|&nbsp; TP1: {tp1_val:.2f} &nbsp;|&nbsp; TP2: {tp2_val:.2f}
+                                            Entry: {entry_val:.2f} &nbsp;|&nbsp; Stop: {stop_val:.2f} &nbsp;|&nbsp; TP1: {tp1_val:.2f} &nbsp;|&nbsp; TP2: {tp2_val:.2f}
                                         </div>
                                     </div>
                                     <div style="text-align:right;">
