@@ -4042,59 +4042,73 @@ def main():
                         # Also keep key_level_data for backward compat
                         key_level_data = full_ladder
                         
-                        # ── Determine what the system would have signaled ──
-                        # Build a mini ladder from all structural lines at 9 AM
+                        # ── Determine signal based on POSITION in the ladder ──
+                        # David's system: where is price relative to the full ladder?
+                        # Near bottom with targets above = CALL
+                        # Near top with targets below = PUT
+                        # Middle = look at nearest lines for lean
+                        
                         bt_ny_ladder = []
                         for line in bt_levels['ascending']:
                             bt_ny_ladder.append({'value': line['value_at_9am'], 'direction': 'ascending'})
                         for line in bt_levels['descending']:
                             bt_ny_ladder.append({'value': line['value_at_9am'], 'direction': 'descending'})
+                        bt_ny_ladder.sort(key=lambda x: x['value'])
                         
                         bt_lines_above = [l for l in bt_ny_ladder if l['value'] > bt_9am_price]
                         bt_lines_below = [l for l in bt_ny_ladder if l['value'] <= bt_9am_price]
                         bt_nearest_above = min(bt_lines_above, key=lambda x: x['value']) if bt_lines_above else None
                         bt_nearest_below = max(bt_lines_below, key=lambda x: x['value']) if bt_lines_below else None
                         
-                        all_asc_values = [l['value'] for l in bt_ny_ladder if l['direction'] == 'ascending']
-                        all_desc_values = [l['value'] for l in bt_ny_ladder if l['direction'] == 'descending']
+                        total_lines = len(bt_ny_ladder)
+                        lines_above_count = len(bt_lines_above)
+                        lines_below_count = len(bt_lines_below)
                         
                         system_signal = "NEUTRAL"
                         signal_color = "#ffd740"
                         signal_detail = ""
                         
-                        if all_asc_values and bt_9am_price < min(all_asc_values):
-                            # Below ALL ascending = bearish
-                            system_signal = "PUT (Bearish)"
-                            signal_color = "#ff1744"
-                            signal_detail = f"Price below ALL ascending lines (min asc: {min(all_asc_values):.0f})"
-                        elif all_desc_values and bt_9am_price > max(all_desc_values) and all_asc_values and bt_9am_price > max(all_asc_values):
-                            # Above ALL lines = strong bullish
-                            system_signal = "CALL (Bullish)"
-                            signal_color = "#00e676"
-                            signal_detail = f"Price ABOVE all lines — strong trend"
-                        elif all_desc_values and bt_9am_price < min(all_desc_values):
-                            # Below ALL lines = strong bearish
-                            system_signal = "PUT (Bearish)"
-                            signal_color = "#ff1744"
-                            signal_detail = f"Price BELOW all lines — strong downtrend"
-                        elif all_asc_values and bt_9am_price > max(all_asc_values):
-                            # Above all ascending = bullish
-                            system_signal = "CALL (Bullish)"
-                            signal_color = "#00e676"
-                            signal_detail = f"Price above ALL ascending lines (max asc: {max(all_asc_values):.0f})"
-                        elif bt_nearest_above and bt_nearest_below:
-                            if bt_nearest_above['direction'] == 'ascending' and bt_nearest_below['direction'] == 'descending':
-                                system_signal = "NEUTRAL (Between Asc ↗ & Desc ↘)"
-                                signal_color = "#ffd740"
-                                signal_detail = "Price between ascending above and descending below — no clear bias"
-                            elif bt_nearest_above['direction'] == 'descending':
-                                system_signal = "PUT (Bearish Lean)"
+                        if total_lines > 0:
+                            # Position ratio: 0.0 = at bottom (all lines above), 1.0 = at top (all lines below)
+                            position_ratio = lines_below_count / total_lines
+                            
+                            if lines_below_count == 0:
+                                # Price below ALL lines — strong CALL (bottomed out, everything is a target above)
+                                system_signal = "CALL (Strong — Bottom of Ladder)"
+                                signal_color = "#00e676"
+                                signal_detail = f"Price below all {total_lines} lines. Every line above is a target."
+                            elif lines_above_count == 0:
+                                # Price above ALL lines — strong PUT (topped out, everything is a target below)  
+                                system_signal = "PUT (Strong — Top of Ladder)"
                                 signal_color = "#ff1744"
-                                signal_detail = f"Descending resistance at {bt_nearest_above['value']:.0f} above"
-                            elif bt_nearest_below['direction'] == 'ascending':
+                                signal_detail = f"Price above all {total_lines} lines. Every line below is a target."
+                            elif position_ratio <= 0.3:
+                                # Near bottom — CALL
+                                system_signal = "CALL (Bullish)"
+                                signal_color = "#00e676"
+                                nearest_desc_below = [l for l in bt_lines_below if l['direction'] == 'descending']
+                                support_label = f"Support: nearest line below @ {bt_nearest_below['value']:.0f}" if bt_nearest_below else ""
+                                signal_detail = f"Near bottom of ladder ({lines_below_count} below, {lines_above_count} above). {support_label}"
+                            elif position_ratio >= 0.7:
+                                # Near top — PUT
+                                system_signal = "PUT (Bearish)"
+                                signal_color = "#ff1744"
+                                signal_detail = f"Near top of ladder ({lines_below_count} below, {lines_above_count} above). Resistance above, targets below."
+                            elif bt_nearest_below and bt_nearest_below['direction'] == 'descending' and bt_nearest_above:
+                                # Descending support below + targets above = bullish lean
                                 system_signal = "CALL (Bullish Lean)"
                                 signal_color = "#00e676"
-                                signal_detail = f"Ascending support at {bt_nearest_below['value']:.0f} below"
+                                signal_detail = f"Descending support below @ {bt_nearest_below['value']:.0f}, {lines_above_count} targets above"
+                            elif bt_nearest_below and bt_nearest_below['direction'] == 'ascending' and bt_nearest_above:
+                                # Ascending support below (strong floor) = bullish lean
+                                system_signal = "CALL (Bullish Lean)"
+                                signal_color = "#00e676"
+                                signal_detail = f"Ascending support below @ {bt_nearest_below['value']:.0f}, {lines_above_count} targets above"
+                            else:
+                                # True middle
+                                system_signal = "NEUTRAL (Mid-Ladder)"
+                                signal_color = "#ffd740"
+                                signal_detail = f"Mid-ladder position ({lines_below_count} below, {lines_above_count} above). Wait for directional trigger."
                         
                         # Evaluate correctness
                         if system_signal.startswith("PUT"):
@@ -4102,7 +4116,7 @@ def main():
                         elif system_signal.startswith("CALL"):
                             signal_correct = session_move > 2
                         else:
-                            signal_correct = abs(session_move) <= 5  # NEUTRAL is "correct" if flat-ish
+                            signal_correct = abs(session_move) <= 5
                         
                         verdict_text = "✅ CORRECT" if signal_correct else "❌ WRONG"
                         verdict_color = "#00e676" if signal_correct else "#ff1744"
