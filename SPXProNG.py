@@ -4043,16 +4043,20 @@ def main():
                         key_level_data = full_ladder
                         
                         # ── Determine signal based on POSITION in the ladder ──
-                        # David's system: where is price relative to the full ladder?
-                        # Near bottom with targets above = CALL
-                        # Near top with targets below = PUT
-                        # Middle = look at nearest lines for lean
+                        # Core rules:
+                        # 1. Wick lines (HW/LW) are the hardest floors/ceilings — low probability of breaking
+                        # 2. If 8:30 AM tested a wick and rejected, that CONFIRMS it as support/resistance
+                        # 3. Near bottom of ladder with wick support = strong CALL
+                        # 4. Near top of ladder with wick resistance = strong PUT
+                        # 5. Lines between are stepping-stone targets
                         
                         bt_ny_ladder = []
                         for line in bt_levels['ascending']:
-                            bt_ny_ladder.append({'value': line['value_at_9am'], 'direction': 'ascending'})
+                            is_hw = line['type'] == 'highest_wick'
+                            bt_ny_ladder.append({'value': line['value_at_9am'], 'direction': 'ascending', 'is_wick': is_hw})
                         for line in bt_levels['descending']:
-                            bt_ny_ladder.append({'value': line['value_at_9am'], 'direction': 'descending'})
+                            is_lw = line['type'] == 'lowest_wick'
+                            bt_ny_ladder.append({'value': line['value_at_9am'], 'direction': 'descending', 'is_wick': is_lw})
                         bt_ny_ladder.sort(key=lambda x: x['value'])
                         
                         bt_lines_above = [l for l in bt_ny_ladder if l['value'] > bt_9am_price]
@@ -4064,51 +4068,91 @@ def main():
                         lines_above_count = len(bt_lines_above)
                         lines_below_count = len(bt_lines_below)
                         
+                        # Wick proximity check
+                        lw_line = next((l for l in bt_ny_ladder if l['is_wick'] and l['direction'] == 'descending'), None)
+                        hw_line = next((l for l in reversed(bt_ny_ladder) if l['is_wick'] and l['direction'] == 'ascending'), None)
+                        
+                        near_lw = False
+                        near_hw = False
+                        lw_dist = abs(bt_9am_price - lw_line['value']) if lw_line else 999
+                        hw_dist = abs(bt_9am_price - hw_line['value']) if hw_line else 999
+                        
+                        # "Near" a wick = within 15 points
+                        if lw_dist <= 15 and bt_9am_price >= (lw_line['value'] if lw_line else 0):
+                            near_lw = True
+                        if hw_dist <= 15 and bt_9am_price <= (hw_line['value'] if hw_line else 99999):
+                            near_hw = True
+                        
+                        # Check if 8:30 AM tested the wick (pre-market bounce confirmation)
+                        pre_830_mask = full_day_spx['Datetime'] <= datetime.combine(bt_date, time(9, 0))
+                        pre_830 = full_day_spx[pre_830_mask]
+                        lw_tested = False
+                        hw_tested = False
+                        if len(pre_830) > 0 and lw_line:
+                            if pre_830['Low'].min() <= lw_line['value'] + 2:
+                                lw_tested = True
+                        if len(pre_830) > 0 and hw_line:
+                            if pre_830['High'].max() >= hw_line['value'] - 2:
+                                hw_tested = True
+                        
                         system_signal = "NEUTRAL"
                         signal_color = "#ffd740"
                         signal_detail = ""
                         
                         if total_lines > 0:
-                            # Position ratio: 0.0 = at bottom (all lines above), 1.0 = at top (all lines below)
                             position_ratio = lines_below_count / total_lines
                             
-                            if lines_below_count == 0:
-                                # Price below ALL lines — strong CALL (bottomed out, everything is a target above)
+                            # ── Priority 1: Wick proximity signals (strongest) ──
+                            if near_lw and lw_tested:
+                                system_signal = "CALL (Strong — LW Confirmed)"
+                                signal_color = "#00e676"
+                                signal_detail = f"Price near LW @ {lw_line['value']:.0f} (tested & rejected at 8:30). Wick lines rarely break. {lines_above_count} targets above."
+                            elif near_lw:
+                                system_signal = "CALL (Bullish — Near LW Support)"
+                                signal_color = "#00e676"
+                                signal_detail = f"Price {lw_dist:.1f}pt above LW @ {lw_line['value']:.0f}. Wick = hard floor. {lines_above_count} targets above."
+                            elif near_hw and hw_tested:
+                                system_signal = "PUT (Strong — HW Confirmed)"
+                                signal_color = "#ff1744"
+                                signal_detail = f"Price near HW @ {hw_line['value']:.0f} (tested & rejected at 8:30). Wick lines rarely break. {lines_below_count} targets below."
+                            elif near_hw:
+                                system_signal = "PUT (Bearish — Near HW Resistance)"
+                                signal_color = "#ff1744"
+                                signal_detail = f"Price {hw_dist:.1f}pt below HW @ {hw_line['value']:.0f}. Wick = hard ceiling. {lines_below_count} targets below."
+                            
+                            # ── Priority 2: Ladder position signals ──
+                            elif lines_below_count == 0:
                                 system_signal = "CALL (Strong — Bottom of Ladder)"
                                 signal_color = "#00e676"
                                 signal_detail = f"Price below all {total_lines} lines. Every line above is a target."
                             elif lines_above_count == 0:
-                                # Price above ALL lines — strong PUT (topped out, everything is a target below)  
                                 system_signal = "PUT (Strong — Top of Ladder)"
                                 signal_color = "#ff1744"
                                 signal_detail = f"Price above all {total_lines} lines. Every line below is a target."
                             elif position_ratio <= 0.3:
-                                # Near bottom — CALL
                                 system_signal = "CALL (Bullish)"
                                 signal_color = "#00e676"
-                                nearest_desc_below = [l for l in bt_lines_below if l['direction'] == 'descending']
-                                support_label = f"Support: nearest line below @ {bt_nearest_below['value']:.0f}" if bt_nearest_below else ""
-                                signal_detail = f"Near bottom of ladder ({lines_below_count} below, {lines_above_count} above). {support_label}"
+                                signal_detail = f"Near bottom ({lines_below_count} below, {lines_above_count} above). Support @ {bt_nearest_below['value']:.0f}."
                             elif position_ratio >= 0.7:
-                                # Near top — PUT
                                 system_signal = "PUT (Bearish)"
                                 signal_color = "#ff1744"
-                                signal_detail = f"Near top of ladder ({lines_below_count} below, {lines_above_count} above). Resistance above, targets below."
-                            elif bt_nearest_below and bt_nearest_below['direction'] == 'descending' and bt_nearest_above:
-                                # Descending support below + targets above = bullish lean
-                                system_signal = "CALL (Bullish Lean)"
-                                signal_color = "#00e676"
-                                signal_detail = f"Descending support below @ {bt_nearest_below['value']:.0f}, {lines_above_count} targets above"
-                            elif bt_nearest_below and bt_nearest_below['direction'] == 'ascending' and bt_nearest_above:
-                                # Ascending support below (strong floor) = bullish lean
-                                system_signal = "CALL (Bullish Lean)"
-                                signal_color = "#00e676"
-                                signal_detail = f"Ascending support below @ {bt_nearest_below['value']:.0f}, {lines_above_count} targets above"
-                            else:
-                                # True middle
-                                system_signal = "NEUTRAL (Mid-Ladder)"
-                                signal_color = "#ffd740"
-                                signal_detail = f"Mid-ladder position ({lines_below_count} below, {lines_above_count} above). Wait for directional trigger."
+                                signal_detail = f"Near top ({lines_below_count} below, {lines_above_count} above). Resistance above, targets below."
+                            
+                            # ── Priority 3: Mid-ladder lean ──
+                            elif bt_nearest_below and bt_nearest_above:
+                                # More lines above than below = lean CALL (more targets upside)
+                                if lines_above_count > lines_below_count:
+                                    system_signal = "CALL (Bullish Lean)"
+                                    signal_color = "#00e676"
+                                    signal_detail = f"Mid-ladder, more targets above ({lines_above_count}) than below ({lines_below_count}). Support @ {bt_nearest_below['value']:.0f}."
+                                elif lines_below_count > lines_above_count:
+                                    system_signal = "PUT (Bearish Lean)"
+                                    signal_color = "#ff1744"
+                                    signal_detail = f"Mid-ladder, more targets below ({lines_below_count}) than above ({lines_above_count}). Resistance @ {bt_nearest_above['value']:.0f}."
+                                else:
+                                    system_signal = "NEUTRAL (Mid-Ladder)"
+                                    signal_color = "#ffd740"
+                                    signal_detail = f"Equal lines above ({lines_above_count}) and below ({lines_below_count}). Wait for directional trigger."
                         
                         # Evaluate correctness
                         if system_signal.startswith("PUT"):
