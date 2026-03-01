@@ -3223,17 +3223,18 @@ def main():
             st.markdown(f"<span style='font-family: JetBrains Mono; font-size: 0.85rem; color: #8892b0;'>{factor}</span>", unsafe_allow_html=True)
     
     # ============================================================
-    # TAB 4: TRADE LOG — Persistent JSON Storage
+    # TAB 4: TRADE LOG — Daily Journal + Persistent Trade Storage
     # ============================================================
     with tab4:
-        st.markdown("### 📋 Trade Log")
-        st.markdown("*Persistent trade tracking • Performance analytics*")
+        st.markdown("### 📋 Trade Log & Journal")
+        st.markdown("*Daily journal • Trade tracking • Performance analytics*")
         
         st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
         
-        # ── Trade log file path ──
+        # ── File paths ──
         import os
         TRADE_LOG_FILE = os.path.expanduser("~/.spx_prophet_trades.json")
+        JOURNAL_FILE = os.path.expanduser("~/.spx_prophet_journal.json")
         
         def load_trades() -> list:
             """Load trades from persistent JSON file."""
@@ -3252,6 +3253,131 @@ def main():
                     json.dump(trades, f, indent=2)
             except IOError as e:
                 st.error(f"Could not save trades: {e}")
+        
+        def load_journal() -> dict:
+            """Load journal entries from persistent JSON file. Keys are date strings."""
+            try:
+                if os.path.exists(JOURNAL_FILE):
+                    with open(JOURNAL_FILE, 'r') as f:
+                        return json.load(f)
+            except (json.JSONDecodeError, IOError):
+                pass
+            return {}
+        
+        def save_journal(journal: dict):
+            """Save journal entries to persistent JSON file."""
+            try:
+                with open(JOURNAL_FILE, 'w') as f:
+                    json.dump(journal, f, indent=2)
+            except IOError as e:
+                st.error(f"Could not save journal: {e}")
+        
+        # ── DAILY JOURNAL SECTION ──
+        st.markdown("### 📝 Daily Journal")
+        
+        journal_data = load_journal()
+        journal_date = st.date_input("Journal Date", value=datetime.now().date(), key="journal_date")
+        journal_key = str(journal_date)
+        
+        # Load existing entry for this date
+        existing_entry = journal_data.get(journal_key, {})
+        existing_content = existing_entry.get('content', '')
+        existing_tags = existing_entry.get('tags', [])
+        
+        # Try to use streamlit-quill for rich text; fall back to text_area
+        try:
+            from streamlit_quill import st_quill
+            
+            st.caption("Rich text editor • Your entries are saved per date")
+            
+            journal_content = st_quill(
+                value=existing_content,
+                html=True,
+                toolbar=[
+                    ['bold', 'italic', 'underline', 'strike'],
+                    [{'header': [1, 2, 3, False]}],
+                    [{'list': 'ordered'}, {'list': 'bullet'}],
+                    [{'color': []}, {'background': []}],
+                    ['link'],
+                    ['clean'],
+                ],
+                key=f"journal_quill_{journal_key}",
+                placeholder="What happened today? Pre-market plan, session observations, lessons learned..."
+            )
+        except ImportError:
+            st.caption("Text editor • Install `streamlit-quill` for rich text formatting")
+            journal_content = st.text_area(
+                "Journal Entry",
+                value=existing_content,
+                height=250,
+                key=f"journal_text_{journal_key}",
+                placeholder="What happened today? Pre-market plan, session observations, lessons learned...",
+                label_visibility="collapsed"
+            )
+        
+        # Quick tags
+        tag_options = ["📈 Green Day", "📉 Red Day", "😐 Flat", "🎯 Hit All Targets", 
+                       "✋ Stopped Out", "⏰ Time Stopped", "🧠 Lesson Learned", 
+                       "💎 Diamond Hands", "🐔 Chickened Out", "📊 High Confluence"]
+        
+        # Pre-select existing tags
+        default_tags = [t for t in existing_tags if t in tag_options]
+        journal_tags = st.pills("Quick Tags", tag_options, selection_mode="multi", 
+                                default=default_tags, key=f"journal_tags_{journal_key}")
+        
+        jcol1, jcol2, jcol3 = st.columns([1, 1, 2])
+        with jcol1:
+            if st.button("💾 Save Entry", use_container_width=True, key="save_journal"):
+                journal_data[journal_key] = {
+                    'content': journal_content if journal_content else '',
+                    'tags': list(journal_tags) if journal_tags else [],
+                    'updated': datetime.now().isoformat(),
+                }
+                save_journal(journal_data)
+                st.success("Journal saved!")
+        
+        with jcol2:
+            if st.button("🗑️ Clear Entry", use_container_width=True, key="clear_journal"):
+                if journal_key in journal_data:
+                    del journal_data[journal_key]
+                    save_journal(journal_data)
+                    st.success("Entry cleared.")
+                    st.rerun()
+        
+        # Show recent journal entries
+        if len(journal_data) > 0:
+            sorted_dates = sorted(journal_data.keys(), reverse=True)
+            recent_dates = [d for d in sorted_dates if d != journal_key][:5]
+            
+            if recent_dates:
+                with st.expander(f"📖 Recent Entries ({len(journal_data)} total)", expanded=False):
+                    for jd in recent_dates:
+                        entry = journal_data[jd]
+                        content_preview = entry.get('content', '')
+                        # Strip HTML for preview
+                        import re
+                        text_only = re.sub(r'<[^>]+>', '', content_preview)[:120]
+                        tags_str = ' '.join(entry.get('tags', []))
+                        
+                        st.markdown(f"""
+                        <div style="padding: 10px 14px; margin: 4px 0; border-left: 3px solid rgba(0,212,255,0.3);
+                                    background: rgba(255,255,255,0.02); border-radius: 0 8px 8px 0;">
+                            <div style="display:flex; justify-content:space-between; align-items:center;">
+                                <span style="font-family: Orbitron, monospace; color: #00d4ff; font-size: 0.8rem;">{jd}</span>
+                                <span style="font-size: 0.75rem;">{tags_str}</span>
+                            </div>
+                            <div style="font-family: Rajdhani, sans-serif; color: #8892b0; font-size: 0.85rem; margin-top: 4px;">
+                                {text_only}{'...' if len(text_only) >= 120 else ''}
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+        
+        # ── SECTION DIVIDER ──
+        st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+        
+        # ── TRADE LOG SECTION ──
+        st.markdown("### 💰 Trade Log")
         
         def calculate_pnl(session, direction, entry, exit_price, contracts, premium_per_contract=0):
             """Calculate P&L based on session type."""
