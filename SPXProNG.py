@@ -84,7 +84,7 @@ st.markdown("""
     /* ═══════════════════════════════════════════════════════════
        HIDE STREAMLIT CHROME — Clean terminal look
        ═══════════════════════════════════════════════════════════ */
-    #MainMenu { visibility: hidden; }
+    #MainMenu { visibility: visible; }
     footer { visibility: hidden; }
     header[data-testid="stHeader"] { background: transparent; }
     div[data-testid="stDecoration"] { display: none; }
