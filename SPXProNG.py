@@ -452,6 +452,84 @@ st.markdown("""
         padding: 18px 20px;
         margin: 12px 0;
     }
+    
+    /* ═══════════════════════════════════════════════════════════
+       QUILL EDITOR — Dark theme override
+       ═══════════════════════════════════════════════════════════ */
+    .ql-toolbar.ql-snow {
+        background: #0c1220 !important;
+        border-color: rgba(30,45,74,0.5) !important;
+        border-radius: 10px 10px 0 0 !important;
+    }
+    .ql-toolbar.ql-snow .ql-stroke {
+        stroke: #8892b0 !important;
+    }
+    .ql-toolbar.ql-snow .ql-fill {
+        fill: #8892b0 !important;
+    }
+    .ql-toolbar.ql-snow .ql-picker-label {
+        color: #8892b0 !important;
+    }
+    .ql-toolbar.ql-snow button:hover .ql-stroke,
+    .ql-toolbar.ql-snow .ql-picker-label:hover .ql-stroke {
+        stroke: #00d4ff !important;
+    }
+    .ql-toolbar.ql-snow button:hover .ql-fill {
+        fill: #00d4ff !important;
+    }
+    .ql-toolbar.ql-snow button.ql-active .ql-stroke {
+        stroke: #00d4ff !important;
+    }
+    .ql-toolbar.ql-snow button.ql-active .ql-fill {
+        fill: #00d4ff !important;
+    }
+    .ql-container.ql-snow {
+        background: #060910 !important;
+        border-color: rgba(30,45,74,0.5) !important;
+        color: #ccd6f6 !important;
+        font-family: 'Rajdhani', sans-serif !important;
+        font-size: 15px !important;
+        min-height: 220px;
+        border-radius: 0 0 10px 10px !important;
+    }
+    .ql-editor {
+        color: #ccd6f6 !important;
+        min-height: 220px;
+    }
+    .ql-editor.ql-blank::before {
+        color: #3a4a6a !important;
+        font-style: italic !important;
+    }
+    .ql-snow .ql-picker-options {
+        background: #0c1220 !important;
+        border-color: rgba(30,45,74,0.5) !important;
+    }
+    .ql-snow .ql-picker-item {
+        color: #8892b0 !important;
+    }
+    .ql-snow .ql-picker-item:hover {
+        color: #00d4ff !important;
+    }
+    .ql-editor h1, .ql-editor h2, .ql-editor h3 {
+        color: #ccd6f6 !important;
+    }
+    .ql-editor a {
+        color: #00d4ff !important;
+    }
+    .ql-tooltip {
+        background: #0c1220 !important;
+        border-color: rgba(30,45,74,0.5) !important;
+        color: #ccd6f6 !important;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.5) !important;
+    }
+    .ql-tooltip input[type=text] {
+        background: #060910 !important;
+        border-color: rgba(30,45,74,0.5) !important;
+        color: #ccd6f6 !important;
+    }
+    .ql-tooltip a {
+        color: #00d4ff !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -1864,11 +1942,12 @@ def main():
     # MAIN CONTENT: Tabs
     # ============================================================
     
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📈 STRUCTURAL MAP", 
         "🌙 ASIAN SESSION (Futures)", 
         "☀️ NY SESSION (Options)",
-        "📋 TRADE LOG"
+        "📋 TRADE LOG",
+        "🔬 BACKTEST"
     ])
     
     # ============================================================
@@ -3699,6 +3778,408 @@ def main():
                 </div>
             </div>
             """, unsafe_allow_html=True)
+    
+    # ============================================================
+    # TAB 5: HISTORICAL BACKTEST
+    # ============================================================
+    with tab5:
+        st.markdown("### 🔬 Historical Backtest")
+        st.markdown("*Pick a past date • Replay structural lines vs actual price*")
+        
+        st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+        
+        # ── Date Selection ──
+        st.markdown("#### 📅 Select Backtest Date")
+        st.caption("Choose a trading date. The system will fetch candle data, build the line ladder, and overlay actual price action.")
+        
+        bcol1, bcol2 = st.columns([1, 2])
+        with bcol1:
+            # Default to last Friday if weekend
+            today = datetime.now().date()
+            if today.weekday() >= 5:  # Saturday or Sunday
+                default_bt = today - timedelta(days=(today.weekday() - 4))
+            else:
+                default_bt = today - timedelta(days=1)
+            
+            bt_date = st.date_input("Backtest Date (trading day)", value=default_bt, key="bt_date",
+                                     help="Pick a weekday. This is the NY session date — candles fetched from prior day 3PM through this date 3PM.")
+            
+            bt_es_offset = st.number_input("ES-SPX Offset", value=es_offset_val, step=0.5, key="bt_offset",
+                                            help="ES-SPX spread for this date. Use ~65 as default.")
+        
+        with bcol2:
+            bt_bounces_input = st.text_area("Manual Bounces (if no candle data)", 
+                                             placeholder="6850 @ 8:00 PM\n6860 @ 10:30 PM\n6845 @ 1:00 AM",
+                                             height=100, key="bt_bounces_manual")
+        
+        run_backtest = st.button("🚀 Run Backtest", use_container_width=True, type="primary", key="run_bt")
+        
+        if run_backtest:
+            with st.spinner("Fetching candle data and running structural analysis..."):
+                # ── Fetch candle data ──
+                bt_prior = bt_date - timedelta(days=1)
+                # Adjust for weekends
+                while bt_prior.weekday() >= 5:
+                    bt_prior = bt_prior - timedelta(days=1)
+                
+                bt_status = fetch_es_candles(bt_prior, bt_date)
+                
+                if bt_status.candles is not None and len(bt_status.candles) > 0:
+                    st.success(f"Loaded {len(bt_status.candles)} candles via {bt_status.source_used}")
+                    
+                    bt_candles = bt_status.candles.copy()
+                    
+                    # ── Filter overnight session: prior day 3PM to bt_date 9AM ──
+                    bt_candles['Datetime'] = pd.to_datetime(bt_candles['Datetime'])
+                    
+                    overnight_start = datetime.combine(bt_prior, time(15, 0))
+                    nine_am_bt = datetime.combine(bt_date, time(9, 0))
+                    three_pm_bt = datetime.combine(bt_date, time(15, 0))
+                    
+                    overnight_mask = (bt_candles['Datetime'] >= overnight_start) & (bt_candles['Datetime'] <= nine_am_bt)
+                    overnight = bt_candles[overnight_mask].copy()
+                    
+                    # Full day (for actual price overlay)
+                    full_day_mask = (bt_candles['Datetime'] >= overnight_start) & (bt_candles['Datetime'] <= three_pm_bt)
+                    full_day = bt_candles[full_day_mask].copy()
+                    
+                    if len(overnight) < 3:
+                        st.warning(f"Only {len(overnight)} overnight candles found. Results may be limited.")
+                    
+                    # ── Extract bounces and rejections from candle data ──
+                    # Convert to SPX terms
+                    overnight_spx = overnight.copy()
+                    full_day_spx = full_day.copy()
+                    for col in ['Open', 'High', 'Low', 'Close']:
+                        overnight_spx[col] = overnight_spx[col] - bt_es_offset
+                        full_day_spx[col] = full_day_spx[col] - bt_es_offset
+                    
+                    # Auto-detect bounces/rejections from candles
+                    bt_bounces = []
+                    bt_rejections = []
+                    bt_highest_wick = {'price': 0, 'time': overnight_start}
+                    bt_lowest_wick = {'price': 99999, 'time': overnight_start}
+                    
+                    for _, row in overnight_spx.iterrows():
+                        candle_time = row['Datetime']
+                        high = row['High']
+                        low = row['Low']
+                        open_p = row['Open']
+                        close = row['Close']
+                        body_top = max(open_p, close)
+                        body_bottom = min(open_p, close)
+                        upper_wick = high - body_top
+                        lower_wick = body_bottom - low
+                        body_size = abs(close - open_p)
+                        
+                        # Track highest/lowest wicks
+                        if high > bt_highest_wick['price']:
+                            bt_highest_wick = {'price': high, 'time': candle_time}
+                        if low < bt_lowest_wick['price']:
+                            bt_lowest_wick = {'price': low, 'time': candle_time}
+                        
+                        # Bounce: long lower wick (wick > body, close near high)
+                        if lower_wick > max(body_size, 1.0) and close > open_p:
+                            bt_bounces.append({'price': low, 'time': candle_time, 'source': f"Bounce @ {candle_time.strftime('%I:%M %p')}"})
+                        
+                        # Rejection: long upper wick (wick > body, close near low)
+                        if upper_wick > max(body_size, 1.0) and close < open_p:
+                            bt_rejections.append({'price': high, 'time': candle_time, 'source': f"Rejection @ {candle_time.strftime('%I:%M %p')}"})
+                    
+                    st.markdown(f"""
+                    <div class="metric-card">
+                        <div style="display:flex; justify-content:space-around; text-align:center;">
+                            <div>
+                                <div class="metric-label">Overnight Candles</div>
+                                <div style="font-family: Orbitron; color: #00d4ff; font-size: 1.5rem;">{len(overnight)}</div>
+                            </div>
+                            <div>
+                                <div class="metric-label">Bounces Found</div>
+                                <div style="font-family: Orbitron; color: #ff5252; font-size: 1.5rem;">{len(bt_bounces)}</div>
+                            </div>
+                            <div>
+                                <div class="metric-label">Rejections Found</div>
+                                <div style="font-family: Orbitron; color: #69f0ae; font-size: 1.5rem;">{len(bt_rejections)}</div>
+                            </div>
+                            <div>
+                                <div class="metric-label">Overnight Range</div>
+                                <div style="font-family: Orbitron; color: #ffd740; font-size: 1.5rem;">
+                                    {bt_highest_wick['price'] - bt_lowest_wick['price']:.1f}pt
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    # ── Build structural levels ──
+                    chart_start = overnight_start
+                    chart_end = three_pm_bt
+                    
+                    bt_levels = build_structural_levels(
+                        bt_highest_wick, bt_lowest_wick, bt_bounces, bt_rejections,
+                        chart_start, chart_end
+                    )
+                    
+                    # ── Build chart with actual price overlay ──
+                    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+                    st.markdown("### 📊 Structural Lines vs Actual Price")
+                    
+                    # Master timeline for chart
+                    bt_times = sorted(full_day_spx['Datetime'].tolist())
+                    bt_time_to_idx = {t: i for i, t in enumerate(bt_times)}
+                    
+                    # Tick marks
+                    bt_tick_vals = []
+                    bt_tick_texts = []
+                    for t in bt_times:
+                        h, m = t.hour, t.minute
+                        if m == 0 and h in [17, 20, 23, 2, 5, 8, 9, 10, 11, 12, 13, 14]:
+                            bt_tick_vals.append(bt_time_to_idx[t])
+                            if h == 9:
+                                bt_tick_texts.append("9AM ▶")
+                            elif h >= 12:
+                                bt_tick_texts.append(f"{h-12 if h > 12 else 12}PM")
+                            else:
+                                bt_tick_texts.append(f"{h}AM" if h < 12 else "12PM")
+                    
+                    bt_fig = go.Figure()
+                    
+                    # ── Actual price line (candlestick-style: OHLC as line) ──
+                    bt_fig.add_trace(go.Scatter(
+                        x=list(range(len(bt_times))),
+                        y=full_day_spx['Close'].tolist(),
+                        mode='lines',
+                        name='Actual Price',
+                        line=dict(color='rgba(255,255,255,0.7)', width=2),
+                        hovertemplate='<b>%{text}</b><br>Price: %{y:.2f}<extra></extra>',
+                        text=[t.strftime('%I:%M %p') for t in bt_times],
+                    ))
+                    
+                    # Price area fill
+                    bt_fig.add_trace(go.Scatter(
+                        x=list(range(len(bt_times))),
+                        y=full_day_spx['Close'].tolist(),
+                        mode='lines', showlegend=False,
+                        line=dict(width=0),
+                        fill='tozeroy', fillcolor='rgba(255,255,255,0.02)',
+                        hoverinfo='skip',
+                    ))
+                    
+                    # ── 9 AM decision line ──
+                    if nine_am_bt in bt_time_to_idx:
+                        idx9 = bt_time_to_idx[nine_am_bt]
+                        bt_fig.add_shape(type="line", x0=idx9, x1=idx9, y0=0, y1=1, yref="paper",
+                            line=dict(color="#ffd740", width=2, dash="dash"))
+                        bt_fig.add_annotation(x=idx9, y=1.05, yref="paper",
+                            text="<b>9:00 AM DECISION</b>", showarrow=False,
+                            font=dict(color="#ffd740", size=11, family="Orbitron"))
+                    
+                    # ── Ascending structural lines ──
+                    for li, asc_line in enumerate(bt_levels['ascending']):
+                        series = generate_line_series(asc_line['anchor_price'], asc_line['anchor_time'], chart_start, chart_end, 'ascending')
+                        xi = [bt_time_to_idx[t] for t, _ in series if t in bt_time_to_idx]
+                        yi = [p for t, p in series if t in bt_time_to_idx]
+                        if xi:
+                            is_wick = asc_line['type'] == 'highest_wick'
+                            line_color = '#ff1744' if is_wick else '#ff5252'
+                            bt_fig.add_trace(go.Scatter(x=xi, y=yi, mode='lines',
+                                name=f"↗ {'HW' if is_wick else f'B{li+1}'}: {asc_line['anchor_price']:.1f}",
+                                line=dict(color=line_color, width=3 if is_wick else 2, dash='solid' if is_wick else 'dash'),
+                                opacity=0.9 if is_wick else 0.5))
+                    
+                    # ── Descending structural lines ──
+                    for li, desc_line in enumerate(bt_levels['descending']):
+                        series = generate_line_series(desc_line['anchor_price'], desc_line['anchor_time'], chart_start, chart_end, 'descending')
+                        xi = [bt_time_to_idx[t] for t, _ in series if t in bt_time_to_idx]
+                        yi = [p for t, p in series if t in bt_time_to_idx]
+                        if xi:
+                            is_wick = desc_line['type'] == 'lowest_wick'
+                            line_color = '#00e676' if is_wick else '#69f0ae'
+                            bt_fig.add_trace(go.Scatter(x=xi, y=yi, mode='lines',
+                                name=f"↘ {'LW' if is_wick else f'R{li+1}'}: {desc_line['anchor_price']:.1f}",
+                                line=dict(color=line_color, width=3 if is_wick else 2, dash='solid' if is_wick else 'dash'),
+                                opacity=0.9 if is_wick else 0.5))
+                    
+                    # ── 9 AM key level horizontals ──
+                    bt_key = bt_levels['key_levels']
+                    for level, color, label, icon in [
+                        (bt_key['highest_wick_ascending'], '#ff1744', 'HW', '▲'),
+                        (bt_key['highest_bounce_ascending'], '#ff5252', 'HB', '△'),
+                        (bt_key['lowest_rejection_descending'], '#69f0ae', 'LR', '▽'),
+                        (bt_key['lowest_wick_descending'], '#00e676', 'LW', '▼'),
+                    ]:
+                        if level:
+                            bt_fig.add_shape(type="line", x0=0, x1=len(bt_times)-1,
+                                y0=level['value_at_9am'], y1=level['value_at_9am'],
+                                line=dict(color=color, width=1, dash="dot"))
+                            bt_fig.add_annotation(x=len(bt_times)-1, y=level['value_at_9am'],
+                                text=f"<b>{icon} {label}</b> {level['value_at_9am']:.2f}",
+                                showarrow=False, font=dict(size=10, color=color, family='JetBrains Mono'),
+                                xshift=8, xanchor="left",
+                                bgcolor='rgba(6,9,16,0.8)', bordercolor=color, borderwidth=1, borderpad=3)
+                    
+                    # ── Bounce / Rejection markers ──
+                    for b in bt_bounces:
+                        if b['time'] in bt_time_to_idx:
+                            bt_fig.add_trace(go.Scatter(
+                                x=[bt_time_to_idx[b['time']]], y=[b['price']],
+                                mode='markers', showlegend=False,
+                                marker=dict(symbol='triangle-up', size=14, color='#ff5252',
+                                    line=dict(width=1.5, color='rgba(255,82,82,0.5)')),
+                                hovertemplate=f"<b>BOUNCE</b><br>{b['price']:.2f}<extra></extra>"
+                            ))
+                    for r in bt_rejections:
+                        if r['time'] in bt_time_to_idx:
+                            bt_fig.add_trace(go.Scatter(
+                                x=[bt_time_to_idx[r['time']]], y=[r['price']],
+                                mode='markers', showlegend=False,
+                                marker=dict(symbol='triangle-down', size=14, color='#69f0ae',
+                                    line=dict(width=1.5, color='rgba(105,240,174,0.5)')),
+                                hovertemplate=f"<b>REJECTION</b><br>{r['price']:.2f}<extra></extra>"
+                            ))
+                    
+                    # ── Wick markers ──
+                    if bt_highest_wick['time'] in bt_time_to_idx:
+                        bt_fig.add_trace(go.Scatter(
+                            x=[bt_time_to_idx[bt_highest_wick['time']]], y=[bt_highest_wick['price']],
+                            mode='markers', showlegend=False,
+                            marker=dict(symbol='diamond', size=16, color='#ff1744',
+                                line=dict(width=2, color='rgba(255,23,68,0.6)')),
+                            hovertemplate=f"<b>HIGHEST WICK</b><br>{bt_highest_wick['price']:.2f}<extra></extra>"
+                        ))
+                    if bt_lowest_wick['time'] in bt_time_to_idx:
+                        bt_fig.add_trace(go.Scatter(
+                            x=[bt_time_to_idx[bt_lowest_wick['time']]], y=[bt_lowest_wick['price']],
+                            mode='markers', showlegend=False,
+                            marker=dict(symbol='diamond', size=16, color='#00e676',
+                                line=dict(width=2, color='rgba(0,230,118,0.6)')),
+                            hovertemplate=f"<b>LOWEST WICK</b><br>{bt_lowest_wick['price']:.2f}<extra></extra>"
+                        ))
+                    
+                    # ── Chart layout ──
+                    bt_fig.update_layout(
+                        template='plotly_dark',
+                        paper_bgcolor='rgba(5,8,16,1)',
+                        plot_bgcolor='rgba(8,13,22,1)',
+                        height=750,
+                        margin=dict(l=10, r=200, t=50, b=60),
+                        title=dict(text=f"<b>Backtest: {bt_date.strftime('%A, %B %d, %Y')}</b>",
+                            font=dict(family='Orbitron', size=16, color='#ccd6f6'), x=0.5),
+                        xaxis=dict(
+                            gridcolor='rgba(30,45,74,0.15)', showgrid=True,
+                            tickmode='array', tickvals=bt_tick_vals, ticktext=bt_tick_texts,
+                            tickfont=dict(size=11, family='Rajdhani', color='#3a4a6a'),
+                            spikemode='across', spikethickness=1, spikecolor='rgba(0,212,255,0.3)',
+                            spikesnap='cursor', spikedash='dot',
+                        ),
+                        yaxis=dict(
+                            gridcolor='rgba(30,45,74,0.12)', showgrid=True,
+                            tickformat='.2f', side='right',
+                            tickfont=dict(family='JetBrains Mono', size=11, color='#5a6a8a'),
+                            spikemode='across', spikethickness=1, spikecolor='rgba(0,212,255,0.3)',
+                            spikesnap='cursor', spikedash='dot',
+                        ),
+                        legend=dict(bgcolor='rgba(6,9,16,0.95)', bordercolor='rgba(30,45,74,0.4)', borderwidth=1,
+                            font=dict(size=10, family='JetBrains Mono', color='#8892b0'), x=1.01, y=1),
+                        font=dict(family='JetBrains Mono', color='#8892b0'),
+                        hovermode='x unified',
+                        hoverlabel=dict(bgcolor='rgba(6,9,16,0.95)', bordercolor='rgba(0,212,255,0.2)',
+                            font=dict(family='JetBrains Mono', size=11, color='#ccd6f6')),
+                        dragmode='pan',
+                    )
+                    
+                    st.plotly_chart(bt_fig, use_container_width=True, config={
+                        'displayModeBar': True, 'displaylogo': False, 'scrollZoom': True,
+                        'modeBarButtonsToRemove': ['autoScale2d', 'lasso2d', 'select2d'],
+                    })
+                    
+                    # ── Backtest Analysis ──
+                    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+                    st.markdown("### 📋 Backtest Analysis")
+                    
+                    # Get 9AM price
+                    nine_am_candles = full_day_spx[full_day_spx['Datetime'] == nine_am_bt]
+                    if len(nine_am_candles) > 0:
+                        bt_9am_price = nine_am_candles.iloc[0]['Open']
+                    else:
+                        # Closest candle to 9 AM
+                        closest = full_day_spx.iloc[(full_day_spx['Datetime'] - nine_am_bt).abs().argsort()[:1]]
+                        bt_9am_price = closest.iloc[0]['Close'] if len(closest) > 0 else 0
+                    
+                    # Get session high/low after 9 AM
+                    rth_mask = full_day_spx['Datetime'] >= nine_am_bt
+                    rth_candles = full_day_spx[rth_mask]
+                    if len(rth_candles) > 0:
+                        rth_high = rth_candles['High'].max()
+                        rth_low = rth_candles['Low'].min()
+                        rth_close = rth_candles.iloc[-1]['Close']
+                        session_move = rth_close - bt_9am_price
+                        session_range = rth_high - rth_low
+                        
+                        # Check which lines were hit
+                        lines_hit = []
+                        for level_name, level_data in [
+                            ('HW Ascending', bt_key['highest_wick_ascending']),
+                            ('HB Ascending', bt_key['highest_bounce_ascending']),
+                            ('LR Descending', bt_key['lowest_rejection_descending']),
+                            ('LW Descending', bt_key['lowest_wick_descending']),
+                        ]:
+                            if level_data:
+                                val = level_data['value_at_9am']
+                                if rth_low <= val <= rth_high:
+                                    lines_hit.append((level_name, val))
+                        
+                        # Direction that day
+                        day_direction = "BULLISH" if session_move > 2 else ("BEARISH" if session_move < -2 else "FLAT")
+                        day_color = "#00e676" if session_move > 2 else ("#ff1744" if session_move < -2 else "#ffd740")
+                        
+                        acol1, acol2, acol3, acol4 = st.columns(4)
+                        with acol1:
+                            st.markdown(f"""
+                            <div class="metric-card">
+                                <div class="metric-label">9 AM Price</div>
+                                <div style="font-family: Orbitron; color: #00d4ff; font-size: 1.3rem;">{bt_9am_price:.2f}</div>
+                            </div>""", unsafe_allow_html=True)
+                        with acol2:
+                            st.markdown(f"""
+                            <div class="metric-card">
+                                <div class="metric-label">Day Direction</div>
+                                <div style="font-family: Orbitron; color: {day_color}; font-size: 1.3rem;">{day_direction}</div>
+                                <div style="font-family: JetBrains Mono; color: #3a4a6a; font-size: 0.75rem;">{session_move:+.1f}pt</div>
+                            </div>""", unsafe_allow_html=True)
+                        with acol3:
+                            st.markdown(f"""
+                            <div class="metric-card">
+                                <div class="metric-label">RTH Range</div>
+                                <div style="font-family: Orbitron; color: #ccd6f6; font-size: 1.3rem;">{session_range:.1f}pt</div>
+                                <div style="font-family: JetBrains Mono; color: #3a4a6a; font-size: 0.75rem;">H:{rth_high:.0f} L:{rth_low:.0f}</div>
+                            </div>""", unsafe_allow_html=True)
+                        with acol4:
+                            st.markdown(f"""
+                            <div class="metric-card">
+                                <div class="metric-label">Lines Hit</div>
+                                <div style="font-family: Orbitron; color: {'#00e676' if lines_hit else '#ff5252'}; font-size: 1.3rem;">{len(lines_hit)}/4</div>
+                            </div>""", unsafe_allow_html=True)
+                        
+                        if lines_hit:
+                            st.markdown("**Lines touched during RTH:**")
+                            for name, val in lines_hit:
+                                st.markdown(f"""
+                                <div style="display:flex; align-items:center; gap: 10px; padding: 6px 12px; margin: 2px 0;
+                                            background: rgba(0,230,118,0.05); border-radius: 8px; border-left: 3px solid #00e676;">
+                                    <span style="font-family: Orbitron, monospace; color: #00e676; font-size: 0.85rem;">✅ {name}</span>
+                                    <span style="font-family: JetBrains Mono, monospace; color: #8892b0; font-size: 0.8rem;">@ {val:.2f}</span>
+                                </div>
+                                """, unsafe_allow_html=True)
+                        else:
+                            st.markdown("""
+                            <div style="padding: 8px 14px; background: rgba(255,23,68,0.05); border-radius: 8px; border-left: 3px solid #ff1744;">
+                                <span style="font-family: Rajdhani, sans-serif; color: #ff5252;">No key levels were hit during RTH. Price stayed in a narrow band.</span>
+                            </div>
+                            """, unsafe_allow_html=True)
+                    
+                else:
+                    st.warning("Could not fetch candle data for this date. Try a different date or check if markets were open.")
 
 
 if __name__ == "__main__":
