@@ -3969,45 +3969,66 @@ def main():
                     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
                     st.markdown("### 📊 Structural Lines vs Actual Price")
                     
-                    # Master timeline for chart
-                    bt_times = sorted(full_day_spx['Datetime'].tolist())
+                    # Generate a continuous 30-min timeline from overnight_start to three_pm
+                    bt_times = []
+                    cursor = overnight_start
+                    while cursor <= three_pm_bt:
+                        bt_times.append(cursor)
+                        cursor += timedelta(minutes=30)
                     bt_time_to_idx = {t: i for i, t in enumerate(bt_times)}
+                    
+                    # Map candle data to the timeline indices
+                    candle_close_map = {}
+                    candle_high_map = {}
+                    candle_low_map = {}
+                    for _, row in full_day_spx.iterrows():
+                        ct = row['Datetime']
+                        # Find closest timeline slot
+                        best_t = min(bt_times, key=lambda t: abs((t - ct).total_seconds()))
+                        candle_close_map[best_t] = row['Close']
+                        candle_high_map[best_t] = row['High']
+                        candle_low_map[best_t] = row['Low']
+                    
+                    # Build price series aligned to timeline
+                    price_x = []
+                    price_y = []
+                    for t in bt_times:
+                        if t in candle_close_map:
+                            price_x.append(bt_time_to_idx[t])
+                            price_y.append(candle_close_map[t])
+                    
+                    # Calculate Y-axis range from actual data
+                    all_prices = list(candle_high_map.values()) + list(candle_low_map.values())
+                    if all_prices:
+                        y_min = min(all_prices) - 5
+                        y_max = max(all_prices) + 5
+                    else:
+                        y_min, y_max = 6800, 6950
                     
                     # Tick marks
                     bt_tick_vals = []
                     bt_tick_texts = []
                     for t in bt_times:
                         h, m = t.hour, t.minute
-                        if m == 0 and h in [17, 20, 23, 2, 5, 8, 9, 10, 11, 12, 13, 14]:
+                        if m == 0 and h in [15, 17, 19, 21, 23, 1, 3, 5, 7, 8, 9, 10, 11, 12, 13, 14]:
                             bt_tick_vals.append(bt_time_to_idx[t])
                             if h == 9:
                                 bt_tick_texts.append("9AM ▶")
                             elif h >= 12:
-                                bt_tick_texts.append(f"{h-12 if h > 12 else 12}PM")
+                                bt_tick_texts.append(f"{h-12 if h > 12 else 12}{'PM' if h < 24 else 'AM'}")
                             else:
-                                bt_tick_texts.append(f"{h}AM" if h < 12 else "12PM")
+                                bt_tick_texts.append(f"{h}AM" if h > 0 else "12AM")
                     
                     bt_fig = go.Figure()
                     
-                    # ── Actual price line (candlestick-style: OHLC as line) ──
+                    # ── Actual price line ──
                     bt_fig.add_trace(go.Scatter(
-                        x=list(range(len(bt_times))),
-                        y=full_day_spx['Close'].tolist(),
+                        x=price_x,
+                        y=price_y,
                         mode='lines',
                         name='Actual Price',
-                        line=dict(color='rgba(255,255,255,0.7)', width=2),
-                        hovertemplate='<b>%{text}</b><br>Price: %{y:.2f}<extra></extra>',
-                        text=[t.strftime('%I:%M %p') for t in bt_times],
-                    ))
-                    
-                    # Price area fill
-                    bt_fig.add_trace(go.Scatter(
-                        x=list(range(len(bt_times))),
-                        y=full_day_spx['Close'].tolist(),
-                        mode='lines', showlegend=False,
-                        line=dict(width=0),
-                        fill='tozeroy', fillcolor='rgba(255,255,255,0.02)',
-                        hoverinfo='skip',
+                        line=dict(color='rgba(255,255,255,0.8)', width=2.5),
+                        hovertemplate='Price: %{y:.2f}<extra></extra>',
                     ))
                     
                     # ── 9 AM decision line ──
@@ -4120,6 +4141,7 @@ def main():
                         yaxis=dict(
                             gridcolor='rgba(30,45,74,0.12)', showgrid=True,
                             tickformat='.2f', side='right',
+                            range=[y_min, y_max],
                             tickfont=dict(family='JetBrains Mono', size=11, color='#5a6a8a'),
                             spikemode='across', spikethickness=1, spikecolor='rgba(0,212,255,0.3)',
                             spikesnap='cursor', spikedash='dot',
