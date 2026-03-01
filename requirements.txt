@@ -6,3 +6,4 @@ yfinance
 tastytrade
 pytz
 streamlit-autorefresh
+streamlit-quill
