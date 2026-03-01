@@ -3999,23 +3999,39 @@ def main():
                         day_color = "#00e676" if session_move > 2 else ("#ff1744" if session_move < -2 else "#ffd740")
                         day_icon = "📈" if session_move > 2 else ("📉" if session_move < -2 else "😐")
                         
-                        # ── Key Levels at 9 AM ──
+                        # ── Key Levels at 9 AM — use FULL ladder, not just 4 ──
                         bt_key = bt_levels['key_levels']
-                        key_level_data = []
-                        for level_name, level_data, color, direction in [
-                            ('HW ↗ (Highest Wick Ascending)', bt_key['highest_wick_ascending'], '#ff1744', 'resistance'),
-                            ('HB ↗ (Highest Bounce Ascending)', bt_key['highest_bounce_ascending'], '#ff5252', 'resistance'),
-                            ('LR ↘ (Lowest Rejection Descending)', bt_key['lowest_rejection_descending'], '#69f0ae', 'support'),
-                            ('LW ↘ (Lowest Wick Descending)', bt_key['lowest_wick_descending'], '#00e676', 'support'),
-                        ]:
-                            if level_data:
-                                val = level_data['value_at_9am']
-                                touched = rth_low <= val <= rth_high
-                                dist = val - bt_9am_price
-                                key_level_data.append({
-                                    'name': level_name, 'value': val, 'color': color,
-                                    'touched': touched, 'dist': dist, 'direction': direction
-                                })
+                        
+                        # Build full ladder with all lines at 9 AM
+                        full_ladder = []
+                        for line in bt_levels['ascending']:
+                            val = line['value_at_9am']
+                            is_hw = line['type'] == 'highest_wick'
+                            full_ladder.append({
+                                'name': f"{'HW' if is_hw else 'B'} ↗",
+                                'full_name': f"{'Highest Wick' if is_hw else 'Bounce'} Ascending",
+                                'value': val,
+                                'line_dir': 'ascending',
+                                'color': '#ff1744' if is_hw else '#ff5252',
+                                'touched': rth_low <= val <= rth_high,
+                                'dist': val - bt_9am_price,
+                            })
+                        for line in bt_levels['descending']:
+                            val = line['value_at_9am']
+                            is_lw = line['type'] == 'lowest_wick'
+                            full_ladder.append({
+                                'name': f"{'LW' if is_lw else 'R'} ↘",
+                                'full_name': f"{'Lowest Wick' if is_lw else 'Rejection'} Descending",
+                                'value': val,
+                                'line_dir': 'descending',
+                                'color': '#00e676' if is_lw else '#69f0ae',
+                                'touched': rth_low <= val <= rth_high,
+                                'dist': val - bt_9am_price,
+                            })
+                        full_ladder.sort(key=lambda x: x['value'], reverse=True)
+                        
+                        # Also keep key_level_data for backward compat
+                        key_level_data = full_ladder
                         
                         # ── Determine what the system would have signaled ──
                         resistance_levels = [l for l in key_level_data if l['direction'] == 'resistance' and l['dist'] > 0]
@@ -4143,48 +4159,75 @@ def main():
                                 <div style="font-family: JetBrains Mono; color: #3a4a6a; font-size: 0.75rem;">H: {overnight_high:.0f} &nbsp; L: {overnight_low:.0f}</div>
                             </div>""", unsafe_allow_html=True)
                         
-                        # ── Key Levels Scorecard ──
+                        # ── Full Ladder Scorecard ──
                         st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-                        st.markdown("### 🎯 Key Levels at 9:00 AM — Did Price Respect Them?")
+                        st.markdown("### 🎯 Full Line Ladder at 9:00 AM — Did Price Reach Them?")
                         
-                        lines_hit = sum(1 for l in key_level_data if l['touched'])
-                        total_lines = len(key_level_data)
+                        lines_hit = sum(1 for l in full_ladder if l['touched'])
+                        total_lines = len(full_ladder)
                         
-                        for level in key_level_data:
+                        # Show ladder with price position marker
+                        price_inserted = False
+                        for level in full_ladder:
+                            # Insert price marker when we pass it
+                            if not price_inserted and level['value'] < bt_9am_price:
+                                st.markdown(f"""
+                                <div style="display:flex; align-items:center; padding: 8px 16px; margin: 4px 0;
+                                            background: rgba(0,212,255,0.08); border-radius: 10px; border: 1px solid rgba(0,212,255,0.3);">
+                                    <span style="font-family: Orbitron, monospace; color: #00d4ff; font-size: 0.95rem; flex:2;">
+                                        ◉ 9 AM PRICE
+                                    </span>
+                                    <span style="font-family: JetBrains Mono, monospace; color: #00d4ff; font-size: 1rem; flex:1; text-align:center; font-weight:700;">
+                                        {bt_9am_price:.2f}
+                                    </span>
+                                    <span style="flex:1;"></span>
+                                </div>
+                                """, unsafe_allow_html=True)
+                                price_inserted = True
+                            
                             if level['touched']:
                                 status_icon = "✅ HIT"
                                 status_color = "#00e676"
                                 bg = "rgba(0,230,118,0.04)"
                                 border = "#00e676"
                             else:
-                                status_icon = "❌ MISSED"
-                                status_color = "#ff5252"
-                                bg = "rgba(255,82,82,0.03)"
-                                border = "#ff5252"
-                            
-                            dist_text = f"{level['dist']:+.1f}pt from 9AM price"
+                                status_icon = "· · ·"
+                                status_color = "#3a4a6a"
+                                bg = "rgba(255,255,255,0.01)"
+                                border = level['color']
                             
                             st.markdown(f"""
-                            <div style="display:flex; align-items:center; justify-content:space-between; padding: 10px 16px; margin: 4px 0;
+                            <div style="display:flex; align-items:center; justify-content:space-between; padding: 8px 16px; margin: 2px 0;
                                         background: {bg}; border-radius: 10px; border-left: 3px solid {border};">
-                                <div style="flex: 2;">
-                                    <span style="font-family: Rajdhani, sans-serif; color: {level['color']}; font-weight: 600; font-size: 0.95rem;">{level['name']}</span>
-                                </div>
-                                <div style="flex: 1; text-align:center;">
-                                    <span style="font-family: JetBrains Mono, monospace; color: #ccd6f6; font-size: 1rem;">{level['value']:.2f}</span>
-                                    <br><span style="font-family: JetBrains Mono; color: #3a4a6a; font-size: 0.7rem;">{dist_text}</span>
-                                </div>
-                                <div style="flex: 1; text-align:right;">
-                                    <span style="font-family: Orbitron, monospace; color: {status_color}; font-size: 0.85rem; letter-spacing: 1px;">{status_icon}</span>
-                                </div>
+                                <span style="font-family: Rajdhani, sans-serif; color: {level['color']}; font-weight: 600; font-size: 0.9rem; flex:2;">
+                                    {level['name']} {level['full_name']}
+                                </span>
+                                <span style="font-family: JetBrains Mono, monospace; color: #ccd6f6; font-size: 0.95rem; flex:1; text-align:center;">
+                                    {level['value']:.2f}
+                                    <br><span style="color: #3a4a6a; font-size: 0.7rem;">{level['dist']:+.1f}pt</span>
+                                </span>
+                                <span style="font-family: Orbitron, monospace; color: {status_color}; font-size: 0.8rem; flex:1; text-align:right;">
+                                    {status_icon}
+                                </span>
+                            </div>
+                            """, unsafe_allow_html=True)
+                        
+                        # If price is below all lines
+                        if not price_inserted:
+                            st.markdown(f"""
+                            <div style="display:flex; align-items:center; padding: 8px 16px; margin: 4px 0;
+                                        background: rgba(0,212,255,0.08); border-radius: 10px; border: 1px solid rgba(0,212,255,0.3);">
+                                <span style="font-family: Orbitron, monospace; color: #00d4ff; font-size: 0.95rem;">
+                                    ◉ 9 AM PRICE — {bt_9am_price:.2f}
+                                </span>
                             </div>
                             """, unsafe_allow_html=True)
                         
                         st.markdown(f"""
                         <div style="text-align:center; padding: 12px; margin-top: 8px;">
-                            <span style="font-family: Orbitron, monospace; color: {'#00e676' if lines_hit >= 2 else '#ffd740' if lines_hit == 1 else '#ff5252'}; 
+                            <span style="font-family: Orbitron, monospace; color: {'#00e676' if lines_hit >= 3 else '#ffd740' if lines_hit >= 1 else '#ff5252'}; 
                                         font-size: 1.1rem; letter-spacing: 2px;">
-                                {lines_hit}/{total_lines} KEY LEVELS TOUCHED
+                                {lines_hit}/{total_lines} LINES TOUCHED DURING RTH
                             </span>
                         </div>
                         """, unsafe_allow_html=True)
@@ -4194,26 +4237,41 @@ def main():
                             st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
                             st.markdown("### 💰 What Would the Trade Have Been?")
                             
+                            # Get sorted lines above and below for target sequencing
+                            sorted_above = sorted([l for l in full_ladder if l['value'] > bt_9am_price], key=lambda x: x['value'])
+                            sorted_below = sorted([l for l in full_ladder if l['value'] <= bt_9am_price], key=lambda x: x['value'], reverse=True)
+                            
                             if system_signal.startswith("PUT"):
-                                # PUT: entry at nearest line above (resistance), stop above that, targets below
-                                entry_val = bt_nearest_above['value']
-                                stop_val = entry_val + 2.0
-                                tp1_val = bt_9am_price
-                                tp2_val = bt_nearest_below['value']
-                                entry_reached = rth_high >= entry_val
-                                stop_hit = rth_high >= stop_val if entry_reached else False
-                                tp1_hit = rth_low <= tp1_val if entry_reached else False
-                                tp2_hit = rth_low <= tp2_val if entry_reached else False
+                                # PUT: stop at nearest line above, entry at current price, 
+                                # targets are lines below in sequence
+                                entry_val = bt_9am_price
+                                stop_val = sorted_above[0]['value'] if sorted_above else entry_val + 5
+                                tp1_val = sorted_below[0]['value'] if len(sorted_below) > 0 else entry_val - 10
+                                tp2_val = sorted_below[1]['value'] if len(sorted_below) > 1 else tp1_val - 10
+                                
+                                entry_reached = True  # market price entry
+                                stop_hit = rth_high >= stop_val
+                                tp1_hit = rth_low <= tp1_val
+                                tp2_hit = rth_low <= tp2_val
+                                
+                                tp1_name = sorted_below[0]['name'] if sorted_below else "TP1"
+                                tp2_name = sorted_below[1]['name'] if len(sorted_below) > 1 else "TP2"
+                                
                             elif system_signal.startswith("CALL"):
-                                # CALL: entry at nearest line below (support), stop below that, targets above
-                                entry_val = bt_nearest_below['value']
-                                stop_val = entry_val - 2.0
-                                tp1_val = bt_9am_price
-                                tp2_val = bt_nearest_above['value']
-                                entry_reached = rth_low <= entry_val
-                                stop_hit = rth_low <= stop_val if entry_reached else False
-                                tp1_hit = rth_high >= tp1_val if entry_reached else False
-                                tp2_hit = rth_high >= tp2_val if entry_reached else False
+                                # CALL: stop at nearest line below, entry at current price,
+                                # targets are lines above in sequence
+                                entry_val = bt_9am_price
+                                stop_val = sorted_below[0]['value'] if sorted_below else entry_val - 5
+                                tp1_val = sorted_above[0]['value'] if len(sorted_above) > 0 else entry_val + 10
+                                tp2_val = sorted_above[1]['value'] if len(sorted_above) > 1 else tp1_val + 10
+                                
+                                entry_reached = True  # market price entry
+                                stop_hit = rth_low <= stop_val
+                                tp1_hit = rth_high >= tp1_val
+                                tp2_hit = rth_high >= tp2_val
+                                
+                                tp1_name = sorted_above[0]['name'] if sorted_above else "TP1"
+                                tp2_name = sorted_above[1]['name'] if len(sorted_above) > 1 else "TP2"
                             else:
                                 entry_val = bt_9am_price
                                 stop_val = entry_val
@@ -4223,32 +4281,34 @@ def main():
                                 stop_hit = False
                                 tp1_hit = False
                                 tp2_hit = False
+                                tp1_name = "TP1"
+                                tp2_name = "TP2"
                             
                             if not entry_reached:
-                                trade_result = "NO FILL — Price never reached entry"
+                                trade_result = "NO TRADE — Signal was NEUTRAL"
                                 trade_color = "#ffd740"
                                 trade_pnl = "$0"
                             elif stop_hit and not tp1_hit:
+                                stop_dist = abs(stop_val - entry_val)
                                 trade_result = "STOPPED OUT"
                                 trade_color = "#ff1744"
-                                trade_pnl = f"-${2.0 * 100 * 3:,.0f}"
+                                trade_pnl = f"-${stop_dist * 100 * 3:,.0f}"
                             elif tp2_hit:
                                 pnl = abs(tp2_val - entry_val) * 100 * 3
-                                trade_result = "HIT TP2 — Full target"
+                                trade_result = f"HIT TP2 ({tp2_name} @ {tp2_val:.0f})"
                                 trade_color = "#00e676"
                                 trade_pnl = f"+${pnl:,.0f}"
                             elif tp1_hit:
                                 pnl = abs(tp1_val - entry_val) * 100 * 3
-                                trade_result = "HIT TP1 — Partial profit"
+                                trade_result = f"HIT TP1 ({tp1_name} @ {tp1_val:.0f})"
                                 trade_color = "#00e676"
                                 trade_pnl = f"+${pnl:,.0f}"
                             else:
                                 trade_result = "TIME STOP — Closed at session end"
                                 trade_color = "#ffd740"
-                                close_pnl = abs(rth_close - entry_val) * 100 * 3
                                 direction_mult = -1 if system_signal.startswith("PUT") else 1
-                                actual_move = direction_mult * (rth_close - entry_val)
-                                trade_pnl = f"{'+'if actual_move > 0 else ''}{actual_move * 100 * 3:,.0f}"
+                                actual_pnl = direction_mult * (rth_close - entry_val) * 100 * 3
+                                trade_pnl = f"{'+'if actual_pnl > 0 else ''}{actual_pnl:,.0f}"
                             
                             st.markdown(f"""
                             <div class="metric-card" style="border: 1px solid {trade_color}30;">
