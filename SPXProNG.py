@@ -3845,11 +3845,16 @@ def main():
                     
                     bt_candles = bt_status.candles.copy()
                     
-                    # ── Normalize column names (yfinance returns lowercase) ──
+                    # ── Normalize column names (yfinance returns varying formats) ──
+                    # First, if datetime is the index, reset it
+                    if isinstance(bt_candles.index, pd.DatetimeIndex):
+                        bt_candles = bt_candles.reset_index()
+                    
+                    # Normalize all column names to Title Case
                     col_map = {}
                     for col in bt_candles.columns:
-                        cl = col.lower().strip()
-                        if cl == 'datetime':
+                        cl = str(col).lower().strip()
+                        if cl in ('datetime', 'date', 'time', 'index', 'timestamp'):
                             col_map[col] = 'Datetime'
                         elif cl == 'open':
                             col_map[col] = 'Open'
@@ -3862,6 +3867,10 @@ def main():
                         elif cl == 'volume':
                             col_map[col] = 'Volume'
                     bt_candles = bt_candles.rename(columns=col_map)
+                    
+                    # If still no Datetime column, use first column
+                    if 'Datetime' not in bt_candles.columns:
+                        bt_candles = bt_candles.rename(columns={bt_candles.columns[0]: 'Datetime'})
                     
                     # ── Filter overnight session: prior day 3PM to bt_date 9AM ──
                     bt_candles['Datetime'] = pd.to_datetime(bt_candles['Datetime'])
